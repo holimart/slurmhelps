@@ -65,7 +65,7 @@ busy / no image yet.
 1. secrets written back; 2. `--pre` hook (the supervisor passes the session-store snapshot);
 3. scan of the node-local tree (excludes below); 4. every `*.sqlite3` in the tree is copied with
 the SQLite backup API and bound over the live file for mksquashfs only (consistent DBs, WAL
-content included, `-wal`/`-shm` excluded); 5. `mksquashfs` (periodic: zstd level 3; final: lz4)
+content included, `-wal`/`-shm` excluded); 5. `mksquashfs` (periodic: zstd level 3 with duplicate detection; final: lz4, `-no-duplicates`)
 into node tmp; 6. verify counts (`unsquashfs -lls` vs the scan, small drift tolerated while lanes
 run); 7. publish: copy as `<image>.new`, fsync, `unsquashfs -s`, hard-link the old image to
 `.prev`, rename. A failing, timed-out or deadline-missed spill never replaces the published image.
@@ -115,3 +115,11 @@ toolchain + one compressed spill copy must fit next to the fleet's own memory.
 another `srun --overlap` step, live binds, spill content and excludes, SQLite WAL capture, secret
 write-back, failed/timed-out spills never replacing the image, supervisor TERM/USR1/end final
 spills, requeue restore, workset-over-node-local precedence, view, writeback.
+
+## Measured (Troja, 2026-10-12, synthetic tree in node tmpfs, 16 cores)
+
+4.3 GB / 150k files: `mksquashfs` zstd-3 8.4 s (1.9 GB image), with `-no-duplicates` 4.8 s;
+`unsquashfs` 3.1 s; copy of the 1.9 GB image tmpfs -> Lustre 1.5 s, Lustre -> tmpfs 46 s (under
+load; the operator measured 2.3 GB in 4.7 s earlier). One run on a busy node took 750 s for the
+same tree: keep the periodic spill (`spill_interval_s`) as the real safety net — a TERM final
+spill has ~25 s and simply leaves the previous image in place if it cannot finish.

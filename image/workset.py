@@ -1148,6 +1148,10 @@ def cmd_spill(cfg: Dict[str, Any], a: argparse.Namespace) -> int:
                      None if mode == "final" else k.cfg.get("comp_level"))
     mk = ["mksquashfs", str(k.root), str(out), "-noappend", "-no-xattrs", "-no-progress",
           "-processors", str(nproc()), "-ef", str(excl)] + comp
+    if mode == "final":
+        # Measured on Troja (16 cores, 4.3 GB / 150k files in tmpfs): 8.4 s with the
+        # duplicate scan, 4.8 s without. A final spill runs against KillWait.
+        mk.append("-no-duplicates")
     plan = [["bind", s, d] for s, d in overlays]
     timeout = None
     if deadline:
