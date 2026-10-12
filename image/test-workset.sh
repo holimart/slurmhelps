@@ -431,6 +431,28 @@ check "H3: normal end -> final spill (reason end)" test "$(mjson "$IMG.manifest.
 lanes_json true false > "$PROJ/.langywrap/lanes.json"
 [ -s "$H/run/lane.pid" ] && kill -KILL "$(cat "$H/run/lane.pid")" 2>/dev/null
 
+echo "== H4: langywrap owns the node-local store (lanes.json store.node_local) -> store-sync is not run =="
+python3 - "$PROJ/.langywrap/lanes.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["store"] = {"default_profile": "ram-sqlite", "node_local": {"databases": ["langypi-mail.sqlite3"]}}
+d["fleet"]["workset"]["enabled"] = False
+json.dump(d, open(sys.argv[1], "w"), indent=2)
+PY
+: > "$H/empty.env"
+SHENV=(SLURMHELPS_HOME="$SHHOME" SLURMHELPS_PROJECT="$PROJ" SLURMHELPS_PROJECT_ENV="$H/empty.env")
+rm -rf "$STAGE"; reset_run
+PID="$(run_sbatch 700004 0)"
+wait_for 90 daemon_up || bad "H4: fake daemon never started"
+check "H4: alloc.env STORE_SYNC is the no-op" grep -q "^STORE_SYNC=$SHHOME/fleet/store-noop.py\$" "$P/agents/state/alloc.env"
+check "H4: stage-in skipped, logged" grep -q "store-sync: stage-in skipped: the session store is langywrap's" "$ALOG"
+check "H4: engine logged" grep -q "engine langywrap: store-noop.py" "$ALOG"
+echo exit0 > "$H/run/daemon.ctl"
+wait_for 60 sbatch_done "$PID" || bad "H4: batch script did not exit"
+check "H4: final snapshot skipped too" grep -q "store-sync: snapshot skipped" "$ALOG"
+SHENV=(SLURMHELPS_HOME="$SHHOME" SLURMHELPS_PROJECT="$PROJ" SLURMHELPS_PROJECT_ENV="$H/agents.env")
+lanes_json true false > "$PROJ/.langywrap/lanes.json"
+[ -s "$H/run/lane.pid" ] && kill -KILL "$(cat "$H/run/lane.pid")" 2>/dev/null
+
 echo "== I: view + writeback =="
 ws view > "$H/run/view.out" 2>&1; rc=$?
 if [ "$rc" = 0 ]; then

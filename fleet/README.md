@@ -169,8 +169,17 @@ daemon and wait for the store to recover.
 
 ## Session store on node-local tmpfs
 
-(langywrap master now also has a built-in `ram-sqlite` store profile with its own node-local
-snapshots, `store.node_local`; `store-sync.py` stays until a project switches to it.)
+**Engine.** When the project's lanes.json has langywrap's own node-local store
+(`store.node_local`, the `ram-sqlite` profile) the daemon stages in and snapshots the databases
+itself (default persist dir `<project>/.langywrap/node-local-persist`), and `supervisor.sbatch`
+replaces `store-sync.py` by `store-noop.py` (logged as `engine langywrap`): two persisted copies
+could diverge, and a store-sync restore at stage-in would win over langywrap's newer snapshot
+("an existing local file wins"). `fleet.session_store.engine` = `auto` (default) | `store-sync` |
+`langywrap` overrides the detection. With the langywrap engine in node-local or workset mode,
+set `store.node_local.persist_dir` to a shared-filesystem path (e.g.
+`<site.agents_dir>/state/runtime/<project>/store`): the default lies inside the project tree,
+which then lives in node tmp and is durable only through spills. The rest of this section
+describes the `store-sync` engine.
 
 Why: on 2026-10-10 the session DB on Lustre grew a ~1 GB WAL that was never
 reset (the daemon and lanes never left SQLite a reader-free moment), and every

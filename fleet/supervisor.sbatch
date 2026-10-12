@@ -444,6 +444,22 @@ rm -rf "$RT_BASE"/attempt-owners-* 2>/dev/null || true
 # STORE_SNAPSHOT_SECS, and once more on exit. Defined before publish_alloc so
 # alloc.env records it.
 STORE_SYNC="$SH_STORE_SYNC"
+# langywrap's own node-local store (lanes.json store.node_local) replaces
+# store-sync.py: two persisted copies could diverge, and a store-sync restore
+# at stage-in would win over langywrap's newer snapshot. fleet.session_store.engine
+# ("auto" default, "store-sync", "langywrap") overrides the detection.
+STORE_ENGINE="$(python3 -c 'import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("store-sync"); raise SystemExit
+e = ((d.get("fleet") or {}).get("session_store") or {}).get("engine", "auto")
+if e == "auto":
+    e = "langywrap" if isinstance((d.get("store") or {}).get("node_local"), dict) else "store-sync"
+print(e)' "$WORK_PROJECT/.langywrap/lanes.json" 2>/dev/null)"
+if [ "$STORE_ENGINE" = langywrap ] && [ "$STORE_SYNC" = "$SLURMHELPS_HOME/fleet/store-sync.py" ]; then
+  STORE_SYNC="$SLURMHELPS_HOME/fleet/store-noop.py"
+fi
 STORE_LOCAL="$SH_NODE_TMP/langywrap-store-$(id -u)/$(basename "$PROJECT")"
 STORE_PERSIST="$STATE/runtime/$(basename "$PROJECT")/store"
 STORE_SNAPSHOT_SECS="${AGENTS_STORE_SNAPSHOT_SECS:-600}"
@@ -572,7 +588,7 @@ if [ "$WS_READY" = 1 ]; then
   WS_LOOP_PID=$!
   log "workset: periodic spill loop pid=$WS_LOOP_PID"
 fi
-log "store: $STORE_LOCAL (persist $STORE_PERSIST, snapshot every ${STORE_SNAPSHOT_SECS}s, pid=$SNAP_PID)"
+log "store: $STORE_LOCAL (engine ${STORE_ENGINE:-store-sync}: $(basename "$STORE_SYNC"); persist $STORE_PERSIST, snapshot every ${STORE_SNAPSHOT_SECS}s, pid=$SNAP_PID)"
 # Start the daemon in its own session/process group and run it as the batch
 # script's CHILD so `wait` blocks here and the signal traps above can fire.
 # (An srun step would be killed when srun returns; a fully detached process
