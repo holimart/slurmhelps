@@ -1,0 +1,609 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  ly — login-side bridge to the langywrap daemon living in the Slurm allocation
+# =============================================================================
+#  Source of truth: slurmhelps fleet/ly. A project calls it through a thin shim
+#  that sets SLURMHELPS_PROJECT (the project root holding slurmhelps.json) and
+#  execs this file. Footprint: config "fleet" section; paths: "site" section.
+#  Runtime state + logs: $AGENTS_DIR (config site.agents_dir; env overrides).
+#
+#  The steward runs on the login node and never runs a lane itself. Every
+#  daemon/lane operation is executed INSIDE the renewable allocation with
+#  `srun --jobid=$JID --overlap`, because the supervisor's control socket is
+#  node-local and it owns its lane children through same-host process groups.
+#
+#  Usage:
+#    ly status                 allocation state + daemon pids + sessions
+#    ly info                   resolved JobID / project / host
+#    ly langywrap <args...>    run `langywrap <args...>` inside the allocation
+#    ly langypi <args...>      run `langypi <args...>` inside the allocation
+#    ly lanes [args...]        shortcut: langywrap lanes <args...>
+#    ly steward [args...]      shortcut: langywrap steward <args...>
+#    ly doctor                 shortcut: langypi doctor --strict
+#    ly exec '<shell>'         run an arbitrary shell command inside the alloc
+#    ly start-lane [--abandon-stale] <lane...>
+#                              start lanes (incl. steward) inside the alloc
+#    ly up [sbatch args...]    submit the supervisor allocation (footprint from
+#                              the config "fleet" section; extra sbatch args
+#                              override it)
+#    ly ensure [k=v...]        reuse a RUNNING allocation if it fits, else submit
+#                              (keys: partition= time= cpus= mem= project=)
+#    ly sbatch-args [k=v...]   dry run: print the sbatch command, submit nothing
+#    ly down                   cancel the supervisor allocation (node-local:
+#                              INT first, so the final spill gets its full budget)
+#    ly renew                  requeue the supervisor allocation (same JobID)
+#    ly logs                   tail allocation + daemon logs
+#    ly store [status|snapshot] inspect the node-local session store (status), or
+#                              copy it to /work now (snapshot); see README
+#    ly hot-reload [--no-pull] guarded NO-DRAIN source reload of the daemon
+#    ly spill [status]         node-local working set or workset image: spill
+#                              NOW (idempotent; same engine as the periodic and
+#                              final spills), or show the last manifest/status
+#    ly workset <args...>      run image/workset.sh <args> inside the allocation
+#                              (outside the namespace: status, spill, ...)
+# =============================================================================
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SH_PROG=ly
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+sh_load || exit 1
+
+AGENTS="$AGENTS_DIR"
+[ -n "$AGENTS" ] || { echo "ly: AGENTS_DIR unset: set site.agents_dir (or site.work_root) in the project's slurmhelps config" >&2; exit 1; }
+STATE="$AGENTS/state"
+LOG="$AGENTS/logs"
+JOBNAME="$AGENTS_JOBNAME"
+ALLOC_ENV="$STATE/alloc.env"
+LW_CHECKOUT="$LANGYWRAP_CHECKOUT"
+
+# Toolchain/caches on /work, langywrap CLI from its /work-backed venv: the
+# remote shell loads the same configuration and runs sh_fleet_env.
+REMOTE_PRELUDE="$(printf 'export SLURMHELPS_HOME=%q SLURMHELPS_PROJECT=%q SLURMHELPS_PROJECT_ENV=%q; ' \
+  "$SLURMHELPS_HOME" "${SLURMHELPS_PROJECT:-}" "${SLURMHELPS_PROJECT_ENV:-}")"'. "$SLURMHELPS_HOME/lib/common.sh" && sh_load && sh_fleet_env'
+
+die() { echo "ly: $*" >&2; exit 1; }
+
+# Allocation footprint. The config's fleet section is the source of truth: every value
+# is passed on the sbatch command line, which overrides the #SBATCH fallbacks in
+# supervisor.sbatch. Sets part/want_time/want_cpus/want_mem/renew_sig/proj from
+# the config, then KEY=VALUE overrides (partition= time= cpus= mem= project=).
+fleet_settings() {
+  part="${AGENTS_PARTITION:-}"; want_time="${AGENTS_TIME:-}"
+  want_cpus="${AGENTS_CPUS:-}"; want_mem="${AGENTS_MEM:-}"
+  renew_sig="${AGENTS_RENEW_SIGNAL:-}"; proj="${AGENT_PROJECT:-}"
+  local kv
+  for kv in "$@"; do
+    case "$kv" in
+      partition=*) part="${kv#*=}" ;; time=*) want_time="${kv#*=}" ;;
+      cpus=*) want_cpus="${kv#*=}" ;; mem=*) want_mem="${kv#*=}" ;;
+      project=*) proj="${kv#*=}" ;; *) die "unknown override $kv (keys: partition= time= cpus= mem= project=)" ;;
+    esac
+  done
+  local v
+  for v in part want_time want_cpus want_mem renew_sig proj; do
+    [ -n "${!v}" ] || die "the slurmhelps config (fleet section) does not set the value for $v"
+  done
+}
+
+# One sbatch option per line, built from fleet_settings.
+sbatch_fleet_args() {
+  printf '%s\n' \
+    "--partition=$part" "--time=$want_time" \
+    "--ntasks=$want_cpus" "--cpus-per-task=1" "--mem=$want_mem" \
+    "--signal=B:USR1@$renew_sig" \
+    "--job-name=$JOBNAME" \
+    "--output=$LOG/sup-%j.out" "--error=$LOG/sup-%j.err" \
+    "--export=ALL,AGENT_PROJECT=$proj,SLURMHELPS_HOME=$SLURMHELPS_HOME,SLURMHELPS_PROJECT=${SLURMHELPS_PROJECT:-},SLURMHELPS_PROJECT_ENV=${SLURMHELPS_PROJECT_ENV:-}"
+  [ -n "${SH_ACCOUNT:-}" ] && printf '%s\n' "--account=$SH_ACCOUNT"
+  return 0
+}
+
+LY_SLURM_RETRIES="${LY_SLURM_RETRIES:-0}"
+LY_SLURM_RETRY_BASE_SECONDS="${LY_SLURM_RETRY_BASE_SECONDS:-2}"
+LY_SLURM_RETRY_MAX_SECONDS="${LY_SLURM_RETRY_MAX_SECONDS:-30}"
+
+[[ "$LY_SLURM_RETRIES" =~ ^(0|[1-9][0-9]*)$ ]] && { [ "$LY_SLURM_RETRIES" -eq 0 ] || [ "$LY_SLURM_RETRIES" -le 12 ]; } || die "LY_SLURM_RETRIES must be 0 (unlimited) or 1..12"
+[[ "$LY_SLURM_RETRY_BASE_SECONDS" =~ ^[1-9][0-9]*$ ]] && [ "$LY_SLURM_RETRY_BASE_SECONDS" -le 30 ] || die "LY_SLURM_RETRY_BASE_SECONDS must be 1..30"
+[[ "$LY_SLURM_RETRY_MAX_SECONDS" =~ ^[1-9][0-9]*$ ]] && [ "$LY_SLURM_RETRY_MAX_SECONDS" -le 60 ] || die "LY_SLURM_RETRY_MAX_SECONDS must be 1..60"
+
+is_slurm_transport_error() {
+  printf '%s' "$1" | grep -Eiq 'Error creating slurm stream socket: (Connection refused|Connection timed out|Resource temporarily unavailable)|Unable to contact slurm controller|Unable to confirm allocation|slurm_load_jobs error: (Connection|Unable to contact|Socket|Timed out|Timeout|Resource temporarily unavailable)|slurm_recv_timeout|Connection timed out|Socket timed out|Resource temporarily unavailable'
+}
+
+slurm_read() {
+  # Retry only read-only controller queries. Zero means unlimited retries;
+  # positive N means N retries after the initial attempt. Waits use bounded
+  # exponential backoff (2, 4, 8, 16, then 30 seconds).
+  local attempt=1 delay="$LY_SLURM_RETRY_BASE_SECONDS" result rc
+  while [ "$LY_SLURM_RETRIES" -eq 0 ] || [ "$attempt" -le "$((LY_SLURM_RETRIES + 1))" ]; do
+    result="$("$@" 2>&1)"
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf '%s' "$result"
+      return 0
+    fi
+    if ! is_slurm_transport_error "$result" || { [ "$LY_SLURM_RETRIES" -ne 0 ] && [ "$attempt" -gt "$LY_SLURM_RETRIES" ]; }; then
+      printf '%s\n' "$result" >&2
+      return "$rc"
+    fi
+    if [ "$LY_SLURM_RETRIES" -eq 0 ]; then
+      echo "[ly] Slurm query unavailable (attempt $attempt; unlimited retries); retrying in ${delay}s: $(printf '%s' "$result" | tail -1)" >&2
+    else
+      echo "[ly] Slurm query unavailable (attempt $attempt; retry $((attempt - 1))/$LY_SLURM_RETRIES); retrying in ${delay}s: $(printf '%s' "$result" | tail -1)" >&2
+    fi
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+    [ "$delay" -le "$LY_SLURM_RETRY_MAX_SECONDS" ] || delay="$LY_SLURM_RETRY_MAX_SECONDS"
+  done
+  return 1
+}
+
+# Resolve Slurm's own srun: some environments put OpenMPI's srun wrapper
+# (/usr/local/openmpi-*/bin/srun) first on PATH, which silently runs nothing
+# for `srun --jobid ... bash -c ...`. Override with LY_SRUN if needed.
+SRUN="${LY_SRUN:-$(type -ap srun | grep -v -i openmpi | head -1)}"
+SRUN="${SRUN:-srun}"
+
+srun_with_retry() {
+  # Stream task output as usual. Retry only Slurm errors that prove the step
+  # never started; an arbitrary command failure or lost connection after a
+  # possible dispatch is returned untouched to avoid duplicate mutations.
+  # The default keeps waiting only when Slurm proves no step was created.
+  # Never retry an arbitrary/lost command result: the payload may have run.
+  local attempt=1 delay="$LY_SLURM_RETRY_BASE_SECONDS" rc output
+  local -a pipeline_status
+  output="$(mktemp "${TMPDIR:-/tmp}/ly-srun.XXXXXX")" || return 1
+  while [ "$LY_SLURM_RETRIES" -eq 0 ] || [ "$attempt" -le "$((LY_SLURM_RETRIES + 1))" ]; do
+    : > "$output"
+    "$SRUN" "$@" 2>&1 | tee "$output"
+    pipeline_status=("${PIPESTATUS[@]}")
+    rc="${pipeline_status[0]}"
+    [ "$rc" -eq 0 ] && { rm -f "$output"; return 0; }
+    if grep -Eiq '^srun: error: Error creating slurm stream socket: Operation not permitted$' "$output"; then
+      echo "[ly] Slurm socket access was denied by local permissions; not retrying." >&2
+      rm -f "$output"
+      return "$rc"
+    fi
+    if ! grep -Eiq '^srun: error: Error creating slurm stream socket: (Connection refused|Connection timed out|Resource temporarily unavailable)$|^srun: error: Unable to confirm allocation for job .*Unable to contact slurm controller' "$output" || { [ "$LY_SLURM_RETRIES" -ne 0 ] && [ "$attempt" -gt "$LY_SLURM_RETRIES" ]; }; then
+      rm -f "$output"
+      return "$rc"
+    fi
+    if [ "$LY_SLURM_RETRIES" -eq 0 ]; then
+      echo "[ly] Slurm step did not start (attempt $attempt; unlimited retries); retrying in ${delay}s" >&2
+    else
+      echo "[ly] Slurm step did not start (attempt $attempt; retry $((attempt - 1))/$LY_SLURM_RETRIES); retrying in ${delay}s" >&2
+    fi
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+    [ "$delay" -le "$LY_SLURM_RETRY_MAX_SECONDS" ] || delay="$LY_SLURM_RETRY_MAX_SECONDS"
+  done
+  rm -f "$output"
+  return 1
+}
+
+running_jid() {
+  local jobs cached info
+  jobs="$(slurm_read squeue -h -u "$USER" -n "$JOBNAME" -t R -o '%i')" || return $?
+  [ -n "$jobs" ] && { printf '%s\n' "$jobs" | head -1; return 0; }
+  # squeue can return an empty listing during a controller blip. Confirm the
+  # last published JobID before using it; never trust alloc.env by itself.
+  cached="$(awk -F= '/^SLURM_JOB_ID=/{print $2; exit}' "$ALLOC_ENV" 2>/dev/null)"
+  [ -n "$cached" ] || return 0
+  info="$(slurm_read scontrol show job -o "$cached")" || return $?
+  [[ "$info" == *"JobState=RUNNING"* ]] && printf '%s\n' "$cached"
+}
+
+any_jid() {
+  local jobs
+  jobs="$(slurm_read squeue -h -u "$USER" -n "$JOBNAME" -o '%i')" || return $?
+  [ -n "$jobs" ] && printf '%s\n' "$jobs" | head -1
+}
+
+project() {
+  if [ -f "$ALLOC_ENV" ]; then
+    awk -F= '/^PROJECT=/{print $2}' "$ALLOC_ENV"
+  else
+    echo "${AGENT_PROJECT:-}"
+  fi
+}
+
+jid() {
+  local j; j="$(running_jid)"
+  [ -n "$j" ] || die "no RUNNING '$JOBNAME' allocation. Start one with: ly up"
+  echo "$j"
+}
+
+alloc_runtime_dir() {  # the daemon's private XDG_RUNTIME_DIR, read from alloc.env
+  [ -f "$ALLOC_ENV" ] && awk -F= '/^XDG_RUNTIME_DIR=/{print $2}' "$ALLOC_ENV"
+}
+
+alloc_store_dir() {  # the node-local session DB dir the daemon uses, from alloc.env
+  [ -f "$ALLOC_ENV" ] && awk -F= '/^LANGYWRAP_SESSIONS_DB_DIR=/{print $2}' "$ALLOC_ENV"
+}
+
+alloc_store_persist() {  # the /work snapshot dir of the session store, from alloc.env
+  [ -f "$ALLOC_ENV" ] && awk -F= '/^STORE_PERSIST=/{print $2}' "$ALLOC_ENV"
+}
+
+alloc_store_sync() {  # the store-sync.py path inside the project checkout, from alloc.env
+  [ -f "$ALLOC_ENV" ] && awk -F= '/^STORE_SYNC=/{print $2}' "$ALLOC_ENV"
+}
+
+alloc_key() {  # alloc_key KEY — a value from alloc.env (empty if absent)
+  [ -f "$ALLOC_ENV" ] && awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$ALLOC_ENV"
+}
+
+live_end() {  # live_end <JobID> — EndTime from squeue; empty if Slurm is unreachable
+  local e
+  [ -n "$1" ] || return 0
+  e="$(slurm_read squeue -h -j "$1" -o '%e' 2>/dev/null)" || return 0
+  e="$(printf '%s' "$e" | tr -d '[:space:]')"
+  case "$e" in ""|N/A|*[!0-9T:-]*) return 0 ;; esac
+  printf '%s' "$e"
+}
+
+show_alloc_env() {  # cat alloc.env, with END replaced by the live squeue EndTime when Slurm answers
+  [ -f "$ALLOC_ENV" ] || { echo "(none — run: ly up)"; return 0; }
+  local jid live
+  jid="$(awk -F= '/^SLURM_JOB_ID=/{print $2; exit}' "$ALLOC_ENV")"
+  live="$(live_end "$jid")"
+  if [ -n "$live" ]; then
+    awk -v e="$live" '/^END=/{print "END=" e; next} {print}' "$ALLOC_ENV"
+  else
+    echo "# squeue unreachable or job gone: END below is from alloc.env and may be stale" >&2
+    cat "$ALLOC_ENV"
+  fi
+}
+
+in_alloc() {  # in_alloc <shell-command>
+  local j p rt sdb
+  j="$(jid)"; p="$(project)"
+  rt="$(alloc_runtime_dir)"
+  # Every langywrap CLI must open the same node-local session DB as the daemon.
+  sdb="$(alloc_store_dir)"
+  # Under a workset the project tree is visible only inside the allocation's
+  # workset mount namespace: join it (workset.sh exec = nsenter) first.
+  local -a ws=()
+  if [ "$(alloc_key WORKSET)" = 1 ]; then
+    ws=(bash "$(alloc_key WORKSET_SH)" --project "$(alloc_key WORKSET_PROJECT)" exec --)
+  fi
+  # env -u BASH_ENV: compute nodes set BASH_ENV to lmod's init, which dumps
+  # the environment and corrupts the step; clear it for our command.
+  srun_with_retry --jobid="$j" --overlap -n1 --chdir "$p" \
+    env -u BASH_ENV ${ws[@]+"${ws[@]}"} bash -c "${rt:+export XDG_RUNTIME_DIR='$rt'; }${sdb:+export LANGYWRAP_SESSIONS_DB_DIR='$sdb'; }$REMOTE_PRELUDE; cd $(printf '%q' "$p") 2>/dev/null; $1"
+}
+
+in_alloc_raw() {  # in_alloc_raw CMD... — run argv in the allocation, OUTSIDE any workset namespace
+  local j; j="$(jid)"
+  srun_with_retry --jobid="$j" --overlap -n1 env -u BASH_ENV "$@"
+}
+
+remote_command() {
+  # Preserve argv across the login-shell -> srun -> remote bash boundary.
+  # In particular, a session steer is one message argument; expanding $* into
+  # shell source used to execute backticks/quotes inside that message locally
+  # on the compute node instead of delivering them to langywrap.
+  local encoded
+  printf -v encoded '%q ' "$@"
+  in_alloc "$encoded"
+}
+
+# The daemon's remaining source-reload budget. A no-drain re-exec consumes one
+# (20 -> 19), so a change here is proof the daemon replaced its image in place.
+budget_left() {
+  in_alloc 'langywrap session ping --path . 2>/dev/null' 2>/dev/null \
+    | python3 -c 'import sys, json
+raw = sys.stdin.read(); i = raw.find("{")
+if i < 0:
+    raise SystemExit
+d = json.loads(raw[i:])
+print((d.get("reload_budget") or {}).get("left", ""))' 2>/dev/null
+}
+
+case "${1:-status}" in
+  info)
+    # The project pins the slurmhelps it was tested with (lanes.json fleet.slurmhelps.ref).
+    pin="$("$(sh_python)" -c 'import json,sys
+try:
+    print(((json.load(open(sys.argv[1])).get("fleet") or {}).get("slurmhelps") or {}).get("ref") or "")
+except Exception:
+    pass' "${AGENT_PROJECT:-.}/.langywrap/lanes.json" 2>/dev/null)"
+    head="$(git -C "$SLURMHELPS_HOME" rev-parse HEAD 2>/dev/null)"
+    echo "slurmhelps=$SLURMHELPS_HOME head=${head:-?} pinned=${pin:-none}"
+    if [ -n "$pin" ] && [ -n "$head" ] && [ "${head#"$pin"}" = "$head" ]; then
+      echo "WARN slurmhelps HEAD ${head:0:12} differs from the pinned ref $pin (lanes.json fleet.slurmhelps.ref)" >&2
+    fi
+    echo "job(running)=$(running_jid || true)"
+    echo "job(any)=$(any_jid || true)"
+    echo "project=$(project)"
+    echo "alloc_env=$ALLOC_ENV"
+    show_alloc_env
+    ;;
+
+  status)
+    echo "== allocation =="
+    queue="$(slurm_read squeue -u "$USER" -n "$JOBNAME" -o '%.10i %.12P %.10j %.8T %.10M %.10L %.20R')" || queue="Slurm queue unavailable after retries; see diagnostics above."
+    printf '%s\n' "$queue"
+    echo "== alloc.env (END live from squeue) =="
+    show_alloc_env
+    j="$(running_jid)"
+    if [ -n "$j" ]; then
+      echo "== daemon inside allocation (job $j) =="
+      in_alloc 'pgrep -af "langywrap[.]sessions[.]supervisor" || echo "no supervisor daemon running"'
+      echo "== sessions =="
+      in_alloc 'langywrap session list --path . 2>&1 | head -20'
+    fi
+    ;;
+
+  langywrap|lanes|steward)
+    shift; remote_command langywrap "$@" ;;
+  langypi)
+    shift; remote_command langypi "$@" ;;
+  exec)
+    shift; in_alloc "$*" ;;
+
+  hot-reload)
+    # Guarded NO-DRAIN source reload. The daemon hot-reloads itself when the
+    # checkout changes -- via the no-drain control handoff, NOT the drain -- as
+    # long as persistent_attempts is on (compiled into `--serve`) and
+    # _handoff_preflight is clean. This refuses to run unless the daemon is on
+    # that free path, pulls, then proves the in-place re-exec (budget 20 -> 19).
+    shift || true
+    pull=1; [ "${1:-}" = "--no-pull" ] && pull=0
+
+    free="$(in_alloc "langywrap steward drain-status --project . 2>&1" | grep -i 'FREE-PATH' | head -1)"
+    echo "preflight:${free:-<unmeasured>}"
+    case "$free" in
+      *"FREE-PATH: YES"*) : ;;
+      *) die "refusing: no-drain handoff not free${free:+ (${free})}; wait for lanes to settle, or restart the allocation" ;;
+    esac
+
+    # The active daemon must be running from the checkout this command will
+    # pull. Otherwise a successful pull here cannot trigger its source scan,
+    # and waiting for a reload would be a false success path.
+    daemon_cmd="$(in_alloc 'pid=$(langywrap session ping --path . | python3 -c "import json,sys; print(json.load(sys.stdin)[\"pid\"])" ) && tr "\\0" " " < "/proc/$pid/cmdline"' 2>/dev/null || true)"
+    case "$daemon_cmd" in
+      *"$LW_CHECKOUT/.venv/bin/python"*) : ;;
+      *) die "refusing: active supervisor is not running from $LW_CHECKOUT; migrate/restart it safely before hot-reload" ;;
+    esac
+
+    # The daemon hot-loads whatever .py is on disk, committed or not. Edits belong
+    # in langywrap-worktrees/*; the deploy checkout must stay clean so only
+    # reviewed, pushed commits go live.
+    dirty="$(git -C "$LW_CHECKOUT" status --porcelain -- lib 2>/dev/null)"
+    [ -z "$dirty" ] || die "refusing: $LW_CHECKOUT has uncommitted changes under lib/ (they would hot-load unreviewed):
+$dirty"
+
+    b0="$(budget_left)"
+    echo "reload budget before: ${b0:-?}"
+    head0="$(git -C "$LW_CHECKOUT" rev-parse HEAD 2>/dev/null || true)"
+    if [ "$pull" = 1 ]; then
+      echo "== git pull $LW_CHECKOUT =="
+      # Capture the command status directly. A pipe to `tail` otherwise hides
+      # git's failure (for example, a stale index.lock) and lets this path
+      # report an unchanged checkout as if the pull had completed.
+      if pull_output="$(git -C "$LW_CHECKOUT" pull --ff-only 2>&1)"; then
+        printf '%s\n' "$pull_output" | tail -3
+      else
+        pull_rc=$?
+        printf '%s\n' "$pull_output" >&2
+        die "git pull failed (exit $pull_rc); checkout was not updated"
+      fi
+    fi
+    head1="$(git -C "$LW_CHECKOUT" rev-parse HEAD 2>/dev/null || true)"
+    if [ "$head0" = "$head1" ]; then
+      if [ "$pull" = 0 ]; then
+        waits=24         # --no-pull means a reload is already pending; allow the full handoff window
+      else
+        waits=3          # unchanged checkout: only a short look for a pending reload
+      fi
+    else
+      waits=24           # 5s*24 = 2 min: scan(5s) + quiet(10s) + probe + re-exec
+    fi
+    echo "== waiting for no-drain re-exec (budget $b0) =="
+    i=1; reexec_observed=0
+    while [ "$i" -le "$waits" ]; do
+      sleep 5
+      b1="$(budget_left)"
+      if [ -n "$b1" ] && [ "$b1" != "$b0" ]; then
+        echo "re-exec observed after $((i*5))s: budget $b0 -> $b1 (same pid, no drain)"
+        reexec_observed=1
+        break
+      fi
+      if [ "$i" = "$waits" ]; then echo "no re-exec observed (checkout unchanged or reload pending)"; fi
+      i=$((i+1))
+    done
+    echo "== sessions =="
+    in_alloc "langywrap session list --path . 2>&1 | head -20"
+    if [ "$reexec_observed" -ne 1 ]; then
+      if [ "$head0" != "$head1" ]; then
+        die "langywrap checkout advanced ($head0 -> $head1), but the daemon reload was not confirmed; keep the allocation and retry ly hot-reload --no-pull after checking session ping"
+      elif [ "$pull" = 0 ]; then
+        die "no-drain re-exec was not observed within 120s; the pending reload remains unconfirmed, so inspect session ping before retrying"
+      fi
+    fi
+    ;;
+
+  doctor)
+    in_alloc 'langypi doctor --strict; echo "exit=$?"' ;;
+
+  store)
+    # ly store [status|snapshot]: inspect the node-local session store, or copy
+    # it to /work now. Runs fleet/store-sync.py (path from alloc.env) inside the allocation.
+    shift || true
+    sub="${1:-status}"
+    case "$sub" in status|snapshot) ;; *) die "usage: ly store [status|snapshot]" ;; esac
+    p="$(project)"; loc="$(alloc_store_dir)"; per="$(alloc_store_persist)"; sync="$(alloc_store_sync)"
+    [ -n "$loc" ] && [ -n "$per" ] && [ -n "$sync" ] \
+      || die "alloc.env has no store paths (allocation predates the node-local store); restart it with ly renew or ly up"
+    in_alloc "python3 '$sync' '$sub' '$p' '$loc' '$per'"
+    ;;
+
+  workset)
+    # ly workset <args...> — image/workset.sh inside the allocation, outside
+    # the namespace (status, spill, ...).
+    shift || true
+    [ "$(alloc_key WORKSET)" = 1 ] || die "this allocation does not run a workset (fleet.workset disabled or no image yet)"
+    in_alloc_raw bash "$(alloc_key WORKSET_SH)" --project "$(alloc_key WORKSET_PROJECT)" "$@"
+    ;;
+
+  spill)
+    # Workset image (fleet.workset): spill NOW (status manual), same engine as
+    # the periodic/final spills; `ly spill status` prints the workset status.
+    if [ "$(alloc_key WORKSET)" = 1 ]; then
+      shift || true
+      sub="${1:-now}"
+      case "$sub" in now|status) ;; *) die "usage: ly spill [status]" ;; esac
+      wsh="$(alloc_key WORKSET_SH)"; wsp="$(alloc_key WORKSET_PROJECT)"
+      if [ "$sub" = status ]; then
+        in_alloc_raw bash "$wsh" --project "$wsp" status
+      else
+        lwpy="$LW_CHECKOUT/.venv/bin/python"
+        pre="$(printf '%q ' "$lwpy" "$(alloc_key STORE_SYNC)" snapshot "$(alloc_key PROJECT)" "$(alloc_key LANGYWRAP_SESSIONS_DB_DIR)" "$(alloc_key STORE_PERSIST)")"
+        in_alloc_raw bash -c "$(printf '%q ' bash "$wsh" --project "$wsp" spill --mode manual --reason ly-spill --pre "$pre") >> $(printf '%q' "$LOG/alloc.log") 2>&1; rc=\$?; tail -n 4 $(printf '%q' "$LOG/alloc.log"); exit \$rc"
+      fi
+      exit $?
+    fi
+    # ly spill [status] — node-local working set (fleet.node_local_checkout).
+    # `ly spill` copies commits, dirty/untracked/runtime state and the branch
+    # sync to /work now and writes MANIFEST.json (status "manual" or
+    # "partial"). Safe to repeat; it waits for a running periodic spill.
+    shift || true
+    sub="${1:-now}"
+    case "$sub" in now|status) ;; *) die "usage: ly spill [status]" ;; esac
+    [ "$(alloc_key NODE_LOCAL)" = 1 ] || die "this allocation does not run the node-local working set (fleet.node_local_checkout disabled or stage-in fell back to /work)"
+    nlpy="$(alloc_key NODELOCAL_PY)"; nl="$(alloc_key NODELOCAL)"; nst="$(alloc_key NODELOCAL_STATE)"
+    if [ "$sub" = status ]; then
+      in_alloc "$(printf '%q ' "$nlpy" "$nl" status --state "$nst")"
+    else
+      in_alloc "$(printf '%q ' "$nlpy" "$nl" spill --state "$nst" --mode manual --reason ly-spill) >> $(printf '%q' "$LOG/alloc.log") 2>&1; rc=\$?; tail -n 3 $(printf '%q' "$LOG/alloc.log"); exit \$rc"
+    fi
+    ;;
+
+  start-lane)
+    # start-lane [--abandon-stale] <lane> [lane...] — start lanes INSIDE the
+    # allocation through start-lanes.sh, the same path every launcher uses. The
+    # steward is started this way too: ly start-lane steward.
+    shift
+    [ "$#" -ge 1 ] || die "usage: ly start-lane [--abandon-stale] <lane> [lane...]"
+    lane_args=""
+    for a in "$@"; do lane_args+=" $(printf '%q' "$a")"; done
+    in_alloc "$(printf '%q' "$SLURMHELPS_HOME/fleet/start-lanes.sh")$lane_args"
+    ;;
+
+  sbatch-args)
+    # Read-only dry run: print the sbatch command `up`/`ensure` would build.
+    shift || true
+    fleet_settings "$@"
+    mapfile -t fa < <(sbatch_fleet_args)
+    printf 'sbatch --parsable'; printf ' %q' "${fa[@]}"; printf ' %q\n' "$SCRIPT_DIR/supervisor.sbatch"
+    ;;
+
+  up)
+    # Submit the allocation with the configured footprint; extra sbatch args win.
+    shift || true
+    fleet_settings
+    mapfile -t fa < <(sbatch_fleet_args)
+    mkdir -p "$STATE" "$LOG"
+    jid_new="$(sbatch --parsable "${fa[@]}" "$@" "$SCRIPT_DIR/supervisor.sbatch")"
+    echo "submitted $JOBNAME job $jid_new (part=$part time=$want_time cpus=$want_cpus mem=$want_mem)"
+    ;;
+
+  ensure)
+    # Idempotent: reuse a RUNNING allocation only if it meets the requested
+    # footprint; otherwise submit one. Footprint comes from the config.
+    shift || true
+    fleet_settings "$@"
+    mkdir -p "$STATE" "$LOG"
+    j="$(running_jid)"
+    if [ -n "$j" ]; then
+      # Reuse only if the running allocation matches the requested partition
+      # and has at least the requested CPUs.
+      # Never interpret a failed controller read as an undersized job: doing
+      # so could cancel a healthy allocation and submit a duplicate daemon.
+      info="$(slurm_read scontrol show job "$j")" || die "cannot verify allocation $j; leaving it untouched"
+      have_cpus="$(printf '%s\n' "$info" | sed -n 's/.*NumCPUs=\([0-9]*\).*/\1/p' | head -1)"
+      have_part="$(printf '%s\n' "$info" | sed -n 's/.*Partition=\([^ ]*\).*/\1/p' | head -1)"
+      if [ "$have_part" = "$part" ] && [ -n "$have_cpus" ] && [ "$have_cpus" -ge "$want_cpus" ] 2>/dev/null; then
+        echo "reuse: $JOBNAME $j RUNNING (part=$have_part cpus=$have_cpus) satisfies part=$part cpus>=$want_cpus"
+        echo "$j"
+        exit 0
+      fi
+      # One allocation per project (the store lock allows only one daemon), so
+      # to change the footprint we replace the running one.
+      echo "replacing under-sized $JOBNAME $j (part=$have_part cpus=$have_cpus < part=$part cpus=$want_cpus)"
+      delay=2
+      while :; do
+        remaining="$(slurm_read squeue -h -j "$j" -o '%T')" || die "cannot verify cancellation of $j; not submitting another supervisor"
+        if [ -z "$remaining" ] || ! printf '%s' "$remaining" | grep -Eq '^(RUNNING|PENDING|CONFIGURING|COMPLETING|REQUEUED)$'; then
+          break
+        fi
+        if ! scancel "$j"; then
+          echo "cancel response for $j was unclear; verified it is still $remaining, will retry" >&2
+        fi
+        sleep "$delay"
+        delay=$((delay * 2)); [ "$delay" -le 30 ] || delay=30
+      done
+    fi
+    mapfile -t fa < <(sbatch_fleet_args)
+    jid_new="$(sbatch --parsable "${fa[@]}" "$SCRIPT_DIR/supervisor.sbatch")"
+    echo "submitted $JOBNAME job $jid_new (part=$part time=$want_time cpus=$want_cpus mem=$want_mem)"
+    ;;
+
+  down)
+    j="$(any_jid)"; [ -n "$j" ] || die "no '$JOBNAME' job to cancel"
+    # Node-local working set / workset image: a plain scancel gives the final
+    # spill only KillWait (30 s), less than the store snapshot (or an image
+    # spill) needs. Ask the batch shell to finish first (INT -> final spill with
+    # the long budget, then exit 0), wait for it within LY_DOWN_GRACE seconds,
+    # then make sure it is gone.
+    if { [ "$(alloc_key NODE_LOCAL)" = 1 ] || [ "$(alloc_key WORKSET)" = 1 ]; } && [ "$(alloc_key SLURM_JOB_ID)" = "$j" ] \
+       && [ "$(slurm_read squeue -h -j "$j" -o '%T' 2>/dev/null)" = RUNNING ]; then
+      grace="${LY_DOWN_GRACE:-1800}"
+      echo "final spill: asking $j to spill and exit (INT to the batch shell; up to ${grace}s)"
+      scancel --batch --signal=INT "$j" || echo "INT not delivered; falling back to scancel" >&2
+      waited=0
+      while [ "$waited" -lt "$grace" ]; do
+        st="$(slurm_read squeue -h -j "$j" -o '%T' 2>/dev/null)" || st=RUNNING
+        printf '%s' "$st" | grep -Eq '^(RUNNING|COMPLETING|CONFIGURING)$' || break
+        sleep 10; waited=$((waited + 10))
+      done
+      echo "final spill: batch shell of $j finished after ~${waited}s (state=${st:-absent}); see alloc.log (node-local: spill/$j/MANIFEST.json)"
+    fi
+    delay=2
+    while :; do
+      remaining="$(slurm_read squeue -h -j "$j" -o '%T')" || die "cannot verify cancellation of $j; retry ly down later"
+      if [ -z "$remaining" ] || ! printf '%s' "$remaining" | grep -Eq '^(RUNNING|PENDING|CONFIGURING|COMPLETING|REQUEUED)$'; then
+        echo "cancelled $j (verified state=${remaining:-absent})"; break
+      fi
+      if ! scancel "$j"; then echo "cancel response unclear; $j remains $remaining, retrying" >&2; fi
+      sleep "$delay"; delay=$((delay * 2)); [ "$delay" -le 30 ] || delay=30
+    done ;;
+
+  renew)
+    j="$(jid)"
+    delay=2
+    while :; do
+      state="$(slurm_read squeue -h -j "$j" -o '%T')" || die "cannot verify requeue for $j; retry ly renew later"
+      case "$state" in
+        PENDING|CONFIGURING|REQUEUED) echo "requeued $j (verified state=$state)"; break ;;
+        RUNNING)
+          if ! scontrol requeue "$j"; then echo "requeue response unclear; $j remains RUNNING, checking again" >&2; fi
+          sleep "$delay"; delay=$((delay * 2)); [ "$delay" -le 30 ] || delay=30 ;;
+        *) die "job $j is in state '${state:-absent}', cannot verify a requeue" ;;
+      esac
+    done ;;
+
+  logs)
+    echo "== alloc.log =="; tail -n 40 "$LOG/alloc.log" 2>/dev/null
+    echo "== daemon.log =="; tail -n 30 "$LOG/daemon.log" 2>/dev/null
+    ;;
+
+  *)
+    sed -n '2,45p' "$0"
+    ;;
+esac
