@@ -59,8 +59,8 @@ check() { local what="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$what"; else
 wait_for() { local t="$1" i=0; shift; until "$@" >/dev/null 2>&1; do sleep 0.5; i=$((i + 1)); [ "$i" -ge $((t * 2)) ] && return 1; done; return 0; }
 mjson() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$@"; }
 listing() { unsquashfs -lls -d R "$1" 2>/dev/null | awk '{print $NF}' | sed 's#^R##'; }
-in_img() { listing "$IMG" | grep -qx -- "$1"; }
-not_in_img() { ! listing "$IMG" | grep -qx -- "$1"; }
+in_img() { listing "$IMG" | grep -x -- "$1" > /dev/null; }   # no -q: an early grep exit + pipefail = false FAIL
+not_in_img() { ! listing "$IMG" | grep -x -- "$1" > /dev/null; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
 
 # ---------------------------------------------------------------- config
