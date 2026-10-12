@@ -26,6 +26,14 @@
   },
   "hpc_dir": "outputs/hpc",
   "mount": {"mountpoint": "~/mnt/troja-whitebox"},
+  "mounts": {
+    "workset-view": {
+      "_why": "read-only squashfuse view of the newest working-set image; it exists only on the pinned login node hpc-head, so sshfs must target that host",
+      "remote": "holecem@hpc-head.troja.mff.cuni.cz:/work/ffa/holecem/images/view",
+      "mountpoint": "~/mnt/troja-workset-view",
+      "mode": "ro"
+    }
+  },
   "lan_gpu": {
     "host": "martin@192.168.0.106",
     "base": "/mnt/512ssd/whitebox-gpu",
