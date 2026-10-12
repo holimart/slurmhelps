@@ -1,0 +1,14 @@
+[project]
+name = "slurmhelps"
+version = "0.1.0"
+description = "Slurm / cluster mirror / LAN-GPU job helpers shared by projects (Troja first)."
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+cli = ["click>=8"]
+test = ["pytest>=7", "click>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["lib", "bin"]

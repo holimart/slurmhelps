@@ -1,0 +1,44 @@
+{
+  "_why": "slurmhelps config for whiteboxchallenge: Troja Slurm (operator limits 2026-10-10: one GPU at a time, never fuuk* nodes, never H100/A100/BW6000, no preemptible partitions, <=16 CPUs, <=60G RAM) and the LAN GTX 1080 Ti workstation.",
+  "cluster": {
+    "ssh": "holecem@hpc.troja.mff.cuni.cz",
+    "user": "holecem",
+    "account": "ffa",
+    "mirror": "/work/ffa/holecem/whitebox",
+    "remote_tmp": "/work/ffa/holecem/temp",
+    "slurmhelps_remote": "/work/ffa/holecem/slurmhelps",
+    "venv": ".venv",
+    "job_prefix": "wb-",
+    "max_jobs": 1,
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "60G",
+    "threads": 8,
+    "env": {},
+    "allowed_partitions": ["gpu-ffa", "gpu-ffa-long", "ffa-gpulab"],
+    "partition_rank": {"gpu-ffa": 1, "gpu-ffa-long": 2, "ffa-gpulab": 3},
+    "exclude_node_prefixes": ["fuuk"],
+    "exclude_nodes": ["fuuk-13", "fuuk-14", "fuuk-15"],
+    "exclude_gpus": ["H100", "A100", "BW6000"],
+    "gpu_rank": {"nvidia_l40s": 1, "L40": 2, "V100": 3},
+    "poll_slack_s": 7200,
+    "sacct_since": "2026-10-10"
+  },
+  "hpc_dir": "outputs/hpc",
+  "mount": {"mountpoint": "~/mnt/troja-whitebox"},
+  "lan_gpu": {
+    "host": "martin@192.168.0.106",
+    "base": "/mnt/512ssd/whitebox-gpu",
+    "ssh_key": "/home/martin/.ssh/id_ed25519",
+    "known_hosts": ".langywrap/gpu-known-hosts",
+    "threads": 2,
+    "gpu": "0"
+  },
+  "queue": {
+    "dir": ".langywrap/gpu-queue",
+    "bridge_note": "ran on troja L40S via bridge",
+    "bridge_default_minutes": 90,
+    "bridge_max_sync_gb": 2,
+    "lan_host_label": "1080 Ti"
+  }
+}
