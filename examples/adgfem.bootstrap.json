@@ -1,0 +1,39 @@
+{
+  "_why": "Disaster-recovery config for the ADGFEM fleet on MFF Troja: what bootstrap/rebuild-all.sh needs BEFORE the project checkout exists (the live copy of these sections is the 'slurmhelps' block of adgfem's .langywrap/lanes.json). Pass it with --config.",
+  "site": {
+    "work_root": "/work/ffa/{user}",
+    "slurm_bin": "/usr/local/slurm/bin",
+    "partition_long": "ffa-long",
+    "partition_short": "ffa-short",
+    "toolchain_profile": "{slurmhelps}/env/toolchain-mffsrv.sh",
+    "toolchain_dirs": ["bin", "lib", "uv/python", "uv/tools", "uv/bin", "node", "npm-global", "cargo", "rustup"],
+    "node_version": "v26.11.1",
+    "mpi_env": {"OMPI_MCA_pml": "ob1"},
+    "login_host_pinned": "hpc-head.troja.mff.cuni.cz",
+    "cluster_host_glob": "*.troja.mff.cuni.cz"
+  },
+  "bootstrap": {
+    "project_name": "adgfem",
+    "origin": "git@github.com:holimart/adgfem.git",
+    "upstream": "git@gitlab.mff.cuni.cz:dolejsi/adgfem.git",
+    "branch": "mh-research",
+    "lane_worktree_dir": ".lane-worktrees",
+    "worktrees_file": "{slurmhelps}/examples/adgfem.worktrees",
+    "langywrap_origin": "git@github.com:holimart/langywrap.git",
+    "langywrap_branch": "master",
+    "langywrap_submodules": ["pi", "rtk"],
+    "pi_upstream": "https://github.com/earendil-works/pi.git",
+    "env_local": [
+      "# Project extras sourced by env/env.sh (slurmhelps bootstrap; edit freely).",
+      "export ADGFEM_RUNS_ROOT=\"$WORK_ROOT/adgfem/runs\"",
+      "# PRRTE limits mpirun -np N to the allocation task slots; ADGFEM run scripts",
+      "# read ADGFEM_MPI_EXTRA (the regression launches 2..16 local ranks).",
+      "export ADGFEM_MPI_EXTRA=\"${ADGFEM_MPI_EXTRA:---oversubscribe}\""
+    ],
+    "bin_shims": {
+      "setup-adgfem.sh": "cluster/agents/setup-adgfem.sh",
+      "check-home.sh": "{slurmhelps}/maint/check-home.sh",
+      "setup-caches.sh": "{slurmhelps}/bootstrap/setup-caches.sh"
+    }
+  }
+}
