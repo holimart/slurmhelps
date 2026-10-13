@@ -126,7 +126,7 @@ before.
 ## Cluster-side: adopting slurmhelps for a langywrap fleet
 
 1. **Check out slurmhelps on the cluster** as a git checkout of its own (on Troja
-   `/work/ffa/$USER/slurmhelps-dev` today; see "Deploy target" below). Pin it in the project's
+   `/work/ffa/$USER/slurmhelps-fleet` today; see "Deploy target" below). Pin it in the project's
    `.langywrap/lanes.json`: `"fleet": {"slurmhelps": {"path": "<checkout>", "ref": "<commit>"}}`.
    `ly info` warns when the checkout's HEAD differs from the pinned ref.
 2. **Write the project config** (`<project>/slurmhelps.json`): the `site` section (paths,
