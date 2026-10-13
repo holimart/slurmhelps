@@ -121,6 +121,9 @@ PY
 run_probe "STEWARD TICK" 35 tick langywrap steward tick run --text
 run_probe "VERIFY DISPATCH" 20 yes langywrap steward verify-dispatch --project .
 run_probe "LANE MAP" 20 yes langywrap steward lane-map --project .
+# Stale scratch lane worktrees cost every workset spill (fleet/worktree-gc.py:
+# clean, >2 h old, commits kept on a ref, not in use; never --force).
+run_probe "WORKTREE GC" 30 no python3 "$(dirname "${BASH_SOURCE[0]}")/worktree-gc.py" --project . --apply
 
 if [ "$failures" -gt 0 ]; then
   echo "steward-tick: $failures probe(s) failed" >&2
