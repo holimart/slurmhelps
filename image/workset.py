@@ -954,7 +954,20 @@ def ws_env() -> Dict[str, str]:
                 "npm_config_cache": f"{c}/npm", "YARN_CACHE_FOLDER": f"{c}/yarn", "XDG_CACHE_HOME": f"{c}/xdg"})
     for d in ("uv", "pip", "pycache", "npm", "xdg"):
         os.makedirs(f"{c}/{d}", exist_ok=True)
+    env.setdefault("GIT_SSH_COMMAND", ws_git_ssh_command())
     return env
+
+
+def ws_git_ssh_command() -> str:
+    """ssh for git inside the namespace. Only our uid is mapped, so root-owned
+    files show up owned by `nobody` and ssh rejects the system config
+    (/etc/ssh/ssh_config.d/*: "Bad owner or permissions"), so every push/fetch
+    fails. -F skips the system config; the user's own config (if any) still
+    applies, keys and known_hosts come from the passwd home as usual."""
+    import pwd
+
+    user_cfg = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".ssh" / "config"
+    return f"ssh -F {user_cfg if user_cfg.is_file() else '/dev/null'}"
 
 
 def enter_exec(cfg: Dict[str, Any], cmd: List[str], publish_pid: bool) -> None:

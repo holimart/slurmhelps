@@ -118,6 +118,14 @@ sh_workset_cache_env() {
   export NPM_CONFIG_CACHE="$c/npm" npm_config_cache="$c/npm" YARN_CACHE_FOLDER="$c/yarn"
   export XDG_CACHE_HOME="$c/xdg"
   mkdir -p "$UV_CACHE_DIR" "$PIP_CACHE_DIR" "$PYTHONPYCACHEPREFIX" "$NPM_CONFIG_CACHE" "$XDG_CACHE_HOME" 2>/dev/null || true
+  # Only our uid is mapped in the namespace: root-owned /etc/ssh/ssh_config.d/*
+  # shows up owned by `nobody` and ssh refuses it, so git push/fetch fail.
+  # -F skips the system config (same rule as workset.py ws_git_ssh_command).
+  if [ -z "${GIT_SSH_COMMAND:-}" ]; then
+    local ucfg; ucfg="$(getent passwd "$(id -u)" | cut -d: -f6)/.ssh/config"
+    [ -f "$ucfg" ] || ucfg=/dev/null
+    export GIT_SSH_COMMAND="ssh -F $ucfg"
+  fi
 }
 
 # sh_alloc_value FILE KEY — KEY's value in an alloc.env-style file.
