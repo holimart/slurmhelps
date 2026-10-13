@@ -53,7 +53,7 @@ INNER=${INNER//\{output2\}/\$JOB_TMP/eval2.json}
 # failing job still reaches wb_fail and wb_flush (a bare `wait` used to exit the script first).
 RUN="export JOB_TMP=/tmp/${PFX}\${SLURM_JOB_ID:-\$\$}; export TMPDIR=\$JOB_TMP WB_STAGE=\$JOB_TMP/stage; mkdir -p \$WB_STAGE; \
 WB_REPO=$MIRROR; \
-wb_flush(){ [ -f \$JOB_TMP/eval2.json ] && cp -f \$JOB_TMP/eval2.json \"\$(dirname {output})/eval2.json\"; [ -f \$JOB_TMP/eval.json ] && cp -f \$JOB_TMP/eval.json {output}; [ -d \$WB_STAGE ] && rsync -a \$WB_STAGE/ $MIRROR/; }; \
+wb_flush(){ mkdir -p \"\$(dirname {output})\"; [ -f \$JOB_TMP/eval2.json ] && cp -f \$JOB_TMP/eval2.json \"\$(dirname {output})/eval2.json\"; [ -f \$JOB_TMP/eval.json ] && cp -f \$JOB_TMP/eval.json {output}; [ -d \$WB_STAGE ] && rsync -a \$WB_STAGE/ $MIRROR/; }; \
 wb_fail(){ python3 $SHR/lib/hpc_partial.py finalize-failure --eval \$JOB_TMP/eval.json --log \$JOB_TMP/job.log --exit-code \$1 --terminated \$2 >&2 || true; }; \
 trap 'kill -TERM \$cpid 2>/dev/null || true; wait \$cpid 2>/dev/null || true; wb_fail 143 1; wb_flush || true; exit 143' TERM; \
 ( ( $INNER ) 2>&1 | tee -a \$JOB_TMP/job.log; exit \${PIPESTATUS[0]} ) & cpid=\$!; rc=0; wait \$cpid || rc=\$?; if [ \$rc -ne 0 ]; then wb_fail \$rc 0; fi; wb_flush || true; exit \$rc"
