@@ -83,13 +83,26 @@ while true; do
     echo "$job" >> "$DONE"; continue
   fi
   while [ "$(ssh -o BatchMode=yes "$SH_SSH" "squeue -h -u $SH_USER -o '%j'" | grep -c "^$SH_PREFIX")" -ge "$SH_MAX_JOBS" ]; do sleep 60; done
+  # Ship the job's code to the mirror first (2026-10-13: cards built locally failed with FileNotFoundError):
+  # scripts/, outputs/hpc/<job>/, and every repo path the command names (+ the directory of each .py, for
+  # sibling imports / arm lookup). --update never overwrites newer mirror files; big data files are skipped.
+  sync=(); [ -d scripts ] && sync+=(scripts); [ -d "outputs/hpc/$job" ] && sync+=("outputs/hpc/$job")
+  for t in $run_cmd; do
+    t=${t#*=}
+    case "$t" in outputs/*|scripts/*)
+      [ -e "$t" ] && sync+=("$t") && case "$t" in *.py) sync+=("$(dirname "$t")") ;; esac ;;
+    esac
+  done
+  rsync -aR --update --max-size=50m --exclude __pycache__ --exclude '*.submit.log' "${sync[@]}" "$SH_SSH:$SH_MIRROR/" \
+    || echo "$(date +%H:%M) WARNING code sync for $job failed"
   echo "$(date +%H:%M) submit $job ($mins min)"
   # Parallel up to cluster.max_jobs (2026-10-13): each card runs in its own background subshell,
   # is marked done at submit time (never resubmitted), and logs its own finish line.
   echo "$job" >> "$DONE"
   (
     "$SLURMHELPS_HOME/bin/hpc_run.sh" "$job" "$mins" "$run_cmd" --yes > "$H/$job.submit.log" 2>&1
-    echo "$(date +%H:%M) finished $job rc=$? ($H/$job.submit.log)"
+    rc=$?; st=$(grep -oE "finished: [A-Z_]+" "$H/$job.submit.log" | tail -1 | cut -d' ' -f2)
+    echo "$(date +%H:%M) finished $job rc=$rc slurm=${st:-?} ($H/$job.submit.log)"
   ) &
   # let squeue register the new job before the next slot count
   for _ in $(seq 1 18); do
