@@ -84,9 +84,18 @@ while true; do
   fi
   while [ "$(ssh -o BatchMode=yes "$SH_SSH" "squeue -h -u $SH_USER -o '%j'" | grep -c "^$SH_PREFIX")" -ge "$SH_MAX_JOBS" ]; do sleep 60; done
   echo "$(date +%H:%M) submit $job ($mins min)"
-  "$SLURMHELPS_HOME/bin/hpc_run.sh" "$job" "$mins" "$run_cmd" --yes > "$H/$job.submit.log" 2>&1
-  echo "$(date +%H:%M) finished $job rc=$? ($H/$job.submit.log)"
+  # Parallel up to cluster.max_jobs (2026-10-13): each card runs in its own background subshell,
+  # is marked done at submit time (never resubmitted), and logs its own finish line.
   echo "$job" >> "$DONE"
+  (
+    "$SLURMHELPS_HOME/bin/hpc_run.sh" "$job" "$mins" "$run_cmd" --yes > "$H/$job.submit.log" 2>&1
+    echo "$(date +%H:%M) finished $job rc=$? ($H/$job.submit.log)"
+  ) &
+  # let squeue register the new job before the next slot count
+  for _ in $(seq 1 18); do
+    ssh -o BatchMode=yes "$SH_SSH" "squeue -h -u $SH_USER -o '%j'" | grep -qx "$SH_PREFIX$job" && break
+    sleep 10
+  done
 done
 }
 # The body is a function called on the last line: bash reads a script incrementally, so an edit
