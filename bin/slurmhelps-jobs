@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# slurmhelps-jobs — on-demand GPU Slurm jobs from `fleet.slurm.gpu` in the
+# project's .langywrap/lanes.json (was `langywrap jobs gpu`; Slurm infra lives
+# in slurmhelps now). Usage: slurmhelps-jobs gpu plan|submit|status|wait|cancel
+#   slurmhelps-jobs gpu submit --project . -- CMD ARGS...
+# Needs a python with click (python3, else the langywrap venv).
+set -euo pipefail
+SH="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+PY=""
+for p in "${SLURMHELPS_JOBS_PYTHON:-}" python3 "${LANGYWRAP_CHECKOUT:-/nonexistent}/.venv/bin/python"; do
+  [ -n "$p" ] && "$p" -c 'import click' 2>/dev/null && { PY="$p"; break; }
+done
+[ -n "$PY" ] || { echo "slurmhelps-jobs: no python with click (set SLURMHELPS_JOBS_PYTHON)" >&2; exit 2; }
+case ":$PATH:" in *":/usr/local/slurm/bin:"*) ;; *) [ -d /usr/local/slurm/bin ] && PATH="/usr/local/slurm/bin:$PATH" ;; esac
+export PATH PYTHONPATH="$SH/lib${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m slurmhelps.slurm_gpu_cli "$@"

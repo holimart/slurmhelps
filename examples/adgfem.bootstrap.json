@@ -33,7 +33,8 @@
     "bin_shims": {
       "setup-adgfem.sh": "cluster/agents/setup-adgfem.sh",
       "check-home.sh": "{slurmhelps}/maint/check-home.sh",
-      "setup-caches.sh": "{slurmhelps}/bootstrap/setup-caches.sh"
+      "setup-caches.sh": "{slurmhelps}/bootstrap/setup-caches.sh",
+      "slurmhelps-jobs": "{slurmhelps}/bin/slurmhelps-jobs"
     }
   }
 }

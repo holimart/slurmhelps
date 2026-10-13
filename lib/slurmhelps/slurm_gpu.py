@@ -35,6 +35,13 @@ Machine and project rules live in lanes.json, not in code:
   must match one of them or the config is refused.
 - ``forbidden_path_prefixes``: path prefixes ``log_dir`` must not be under
   (e.g. a project may forbid its home directory). Default empty.
+- ``workset``: true when the project runs in working-set image mode
+  (``fleet.workset``, slurmhelps image/workset.py). The Lustre checkout is then
+  stale while the fleet runs, so the job first stages the newest image onto the
+  GPU node (``workset.sh stage-in``) and runs the command inside a namespace
+  built from it (``workset.sh enter``): the same tree the lanes see, as of the
+  last spill. ``log_dir`` should be a live bind (e.g. ``<project>/runs/...``)
+  so results land on Lustre. Default false.
 
 Partition order is the cost order (cheapest first). ``plan`` picks the first
 partition with a free matching GPU on a non-excluded node; if none is free it
@@ -125,6 +132,7 @@ class GpuPolicy:
     workdir: Path
     log_dir: Path
     ledger: Path
+    workset: bool = False
 
 
 @dataclass
@@ -249,6 +257,7 @@ def load_policy(project: str | Path | None = None) -> GpuPolicy:
         workdir=workdir,
         log_dir=log_dir,
         ledger=ledger,
+        workset=bool(gpu.get("workset", False)),
     )
 
 
@@ -496,6 +505,23 @@ def build_sbatch_argv(
     ]
 
 
+WORKSET_SH = Path(__file__).resolve().parents[2] / "image" / "workset.sh"
+
+
+def workset_wrapper(policy: GpuPolicy, inner: Path) -> list[str]:
+    """Job-script lines: stage the newest workset image onto this (GPU) node,
+    then run INNER inside a namespace built from it. Node-local tmp is
+    job-private on the cluster, so the stage needs no cleanup."""
+    ws = shlex.quote(str(WORKSET_SH))
+    proj = shlex.quote(str(policy.project_root))
+    return [
+        f"export SLURMHELPS_PROJECT={proj}",
+        f"bash {ws} --project {proj} stage-in || {{ echo 'workset stage-in failed' >&2; exit 1; }}",
+        f"bash {ws} --project {proj} status",
+        f"exec bash {ws} --project {proj} enter -- bash {shlex.quote(str(inner))}",
+    ]
+
+
 def submit(
     policy: GpuPolicy, command: list[str], runner: Runner = default_runner, dry_run: bool = False
 ) -> dict[str, Any]:
@@ -517,6 +543,10 @@ def submit(
         body.append(policy.env_setup.strip())
     body.append(f"cd {shlex.quote(str(policy.workdir))} || exit 1")
     body.append(shlex.join(command))
+    if policy.workset:
+        inner = policy.log_dir / f"{job_name}.inner.sh"
+        inner.write_text("\n".join(body) + "\n", encoding="utf-8")
+        body = ["#!/bin/bash", "set -o pipefail", *workset_wrapper(policy, inner)]
     script.write_text("\n".join(body) + "\n", encoding="utf-8")
 
     argv = build_sbatch_argv(policy, job_name, p.partition, script, exclude_arg(policy, p))
@@ -536,6 +566,7 @@ def submit(
         "time": policy.time,
         "user": _user(),
         "project": str(policy.project_root),
+        "workset": policy.workset,
     }
     if dry_run:
         record.update(dry_run=True, sbatch=argv)

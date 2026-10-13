@@ -35,7 +35,7 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `lib/hpc_partial.py` | `PartialResults` checkpointing for job code (`from hpc_partial import PartialResults`) and the wrapper's `finalize-failure` |
 | `lib/slurmhelps/config.py` | project config loader (`show`, `get KEY`, `shell`) |
 | `lib/slurmhelps/gpu_batch.py` | generic probe + sbatch/poll/fetch engine used by `hpc_run.sh` (stdlib only; was langywrap `scripts/hpchelpers`) |
-| `lib/slurmhelps/slurm_gpu.py`, `slurm_gpu_cli.py` | on-demand GPU jobs from `fleet.slurm.gpu` in lanes.json (was `langywrap jobs gpu`) |
+| `lib/slurmhelps/slurm_gpu.py`, `slurm_gpu_cli.py`, `bin/slurmhelps-jobs` | on-demand GPU jobs from `fleet.slurm.gpu` in lanes.json: `slurmhelps-jobs gpu plan\|submit\|status\|wait\|cancel` (was `langywrap jobs gpu`) |
 | `lib/common.sh` | cluster-side config loader (`sh_load`, `sh_fleet_env`): `site` + `fleet` sections as `SH_*` / `AGENTS_*` variables |
 | `fleet/ly` | login-side bridge into the fleet allocation (`status`, `ensure`, `up`, `down`, `renew`, `exec`, `lanes`, `start-lane`, `spill`, `store`, `workset`, `hot-reload`) |
 | `fleet/supervisor.sbatch` | the renewable allocation: daemon, store stage-in/snapshots, node-local or workset mode, final spill on every exit path |

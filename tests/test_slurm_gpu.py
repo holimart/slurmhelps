@@ -236,6 +236,38 @@ def test_submit_dry_run_does_not_call_sbatch(slurm):
     assert not (st / "sbatch.log").exists()
 
 
+def test_submit_workset_stages_image_and_runs_command_inside(slurm):
+    """workset=true: the job script stages the image and enters the namespace;
+    the user's command runs from a separate inner script."""
+    root, st = slurm["root"], slurm["state"]
+    _config(root, slurm["log_dir"], workset=True, env_setup="module load cuda")
+    _set(st, "squeue.txt", "")
+    for part in ("ffa-preempt", "ffa-checkpoint", "gpu-ffa"):
+        _sinfo(st, part, [])
+    policy = sg.load_policy(root)
+    assert policy.workset is True
+    rec = sg.submit(policy, ["python3", "probe.py", "--x", "a b"], dry_run=True)
+    assert rec["workset"] is True
+    outer = Path(rec["script"]).read_text(encoding="utf-8")
+    inner = Path(rec["script"]).with_suffix(".inner.sh").read_text(encoding="utf-8")
+    assert f"--project {root} stage-in" in outer
+    assert f"enter -- bash {Path(rec['script']).with_suffix('.inner.sh')}" in outer
+    assert "probe.py" not in outer
+    assert inner.splitlines()[2:] == ["module load cuda", f"cd {root} || exit 1", "python3 probe.py --x 'a b'"]
+    assert sg.WORKSET_SH.is_file()
+
+
+def test_submit_without_workset_runs_command_directly(slurm):
+    st = slurm["state"]
+    _set(st, "squeue.txt", "")
+    for part in ("ffa-preempt", "ffa-checkpoint", "gpu-ffa"):
+        _sinfo(st, part, [])
+    rec = sg.submit(sg.load_policy(slurm["root"]), ["echo", "hi"], dry_run=True)
+    assert rec["workset"] is False
+    assert Path(rec["script"]).read_text(encoding="utf-8").splitlines()[-1] == "echo hi"
+    assert not Path(rec["script"]).with_suffix(".inner.sh").exists()
+
+
 def test_config_rejects_path_under_forbidden_prefix(slurm):
     root = slurm["root"]
     _config(root, Path("/home/someone/gpu-logs"))
