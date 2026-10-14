@@ -329,6 +329,10 @@ nl_on_exit() {
 # the namespace holder is up).
 ws_spill_pre() {  # the store snapshot, as one shell word list for `spill --pre`
   printf '%q ' "$LW_PY" "$STORE_SYNC" snapshot "$PROJECT" "$STORE_LOCAL" "$STORE_PERSIST"
+  # then drop stale scratch lane worktrees so they are not packed (fleet/worktree-gc.py;
+  # clean, >2 h, commits kept on a ref, not in use); never fails the spill
+  printf '; timeout 120 bash %q --project %q exec -- python3 %q --project %q --apply >/dev/null 2>&1 || true' \
+    "$WS_SH" "$WORK_PROJECT" "$SLURMHELPS_HOME/fleet/worktree-gc.py" "$PROJECT"
 }
 ws_spill_loop() {
   while sleep "$WS_SPILL_INTERVAL"; do
