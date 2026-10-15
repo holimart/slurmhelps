@@ -154,8 +154,18 @@ def fake_tools(tmp_path):
     return bindir
 
 
-@pytest.mark.parametrize("memory,expected", [("45539, 45000", 0), ("45539, 40000", 78)])
-def test_lan_guard_under_real_flock_and_pool(tmp_path, memory, expected):
+@pytest.mark.parametrize(
+    "memory,inline,expected",
+    [
+        ("45539, 45000", None, 0),
+        ("45539, 40000", None, 78),
+        ("45539, 45000", "40", 0),
+        ("45539, 45000", "6", 78),
+        ("45539, 45000", "80", 78),
+        ("45539, 45000", "nan", 78),
+    ],
+)
+def test_lan_guard_under_real_flock_and_pool(tmp_path, memory, inline, expected):
     tools = fake_tools(tmp_path)
     remote = tmp_path / "remote"
     (remote / ".venv/bin").mkdir(parents=True)
@@ -173,6 +183,8 @@ def test_lan_guard_under_real_flock_and_pool(tmp_path, memory, expected):
         + repr(str(marker))
         + ').write_text(os.environ["EVAL_CUPY_POOL_LIMIT_GB"])',
     ]
+    if inline is not None:
+        cmd = ["env", "EVAL_CUPY_POOL_LIMIT_GB=" + inline, *cmd]
     env = {
         **os.environ,
         "PATH": str(tools) + ":" + os.environ["PATH"],
@@ -279,3 +291,54 @@ def test_mock_slurm_guard_failure_finishes_once_without_retry(tmp_path, monkeypa
         and json.loads((d["done"] / "5-guard.json").read_text())["exit"] == 78
     )
     assert not list(d["pending"].iterdir()) and not list(d["running"].iterdir())
+
+
+@pytest.mark.parametrize("value", ["6", "80", "nan", "inf", "true", "", "nope"])
+def test_explicit_pool_conflicts_submit_and_runtime(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(q, "ROOT", tmp_path)
+    monkeypatch.setattr(q, "Q", tmp_path / "queue")
+    command = ["env", "EVAL_CUPY_POOL_LIMIT_GB=" + value, "python", "never.py"]
+    a = argparse.Namespace(
+        name="j",
+        lane="x",
+        priority="high",
+        command=command,
+        sync=[],
+        pull=[],
+        force=True,
+        **BIG,
+    )
+    with pytest.raises(SystemExit):
+        q.cmd_submit(a)
+    # Persisted/manual jobs reject before GPU probe or exec, using the same check.
+    monkeypatch.setattr(
+        m, "probe", lambda: pytest.fail("conflict must reject before GPU probe")
+    )
+    monkeypatch.setattr(os, "execvpe", lambda *a: pytest.fail("must not exec"))
+    assert m.guarded_exec(BIG, command) == 78
+    assert not (tmp_path / "queue/pending").exists()
+
+
+def test_supported_same_pool_and_legacy():
+    for command in [
+        ["env", "EVAL_CUPY_POOL_LIMIT_GB=40", "python", "x.py"],
+        ["/usr/bin/env", "--", "EVAL_CUPY_POOL_LIMIT_GB=40.0", "python", "x.py"],
+        ["env", "X=unrelated", "env", "EVAL_CUPY_POOL_LIMIT_GB=40", "python", "x.py"],
+        ["python", "x.py", "--cupy-pool-limit-gb", "40"],
+    ]:
+        m.validate_command_pool({"gpu_memory": BIG}, command)
+    m.validate_command_pool({}, ["env", "EVAL_CUPY_POOL_LIMIT_GB=6", "python", "x.py"])
+    for command in [
+        ["env", "-i", "python"],
+        ["env", "-u", "EVAL_CUPY_POOL_LIMIT_GB", "python"],
+        ["env", "--unset=EVAL_CUPY_POOL_LIMIT_GB", "python"],
+        ["python", "--cupy-pool-limit-gb", True],
+    ]:
+        with pytest.raises(ValueError):
+            m.validate_command_pool({"gpu_memory": BIG}, command)
+
+
+@pytest.mark.parametrize("prefix", [["env","--"],["/usr/bin/env"],["env","X=x","env"]])
+def test_env_launcher_forms_cannot_hide_override(prefix):
+    with pytest.raises(ValueError):
+        m.validate_command_pool({'gpu_memory':BIG},[*prefix,"EVAL_CUPY_POOL_LIMIT_GB=80","python","never.py"])

@@ -69,6 +69,68 @@ def environment(job):
     )
 
 
+def validate_command_pool(job, command):
+    """Reject known immediate env/CLI pool overrides; never rewrite user argv.
+
+    Shell/script interiors are opaque and must honor the documented pool contract.
+    """
+    import os
+
+    r = resources(job)
+    if "cupy_pool_limit_gib" not in r:
+        return
+    if not command or not all(isinstance(x, str) for x in command):
+        raise ValueError("invalid constrained command argv")
+    expected = r["cupy_pool_limit_gib"]
+
+    def check(value):
+        try:
+            number = float(value)
+        except (ValueError, TypeError, OverflowError) as e:
+            raise ValueError("invalid explicit CuPy pool value") from e
+        if not valid_number(number) or number != expected:
+            raise ValueError("explicit CuPy pool contradicts GPU memory metadata")
+
+    # Follow immediate env launchers, including nested env, but no shell parsing.
+    cursor = 0
+    while cursor < len(command) and os.path.basename(command[cursor]) == "env":
+        cursor += 1
+        while cursor < len(command):
+            token = command[cursor]
+            if token == "--":
+                cursor += 1
+                continue
+            if token in ("-u", "--unset"):
+                if cursor + 1 >= len(command):
+                    raise ValueError("missing env unset name")
+                if command[cursor + 1] == "EVAL_CUPY_POOL_LIMIT_GB":
+                    raise ValueError("env unsets declared CuPy pool")
+                cursor += 2
+                continue
+            if token.startswith("--unset="):
+                if token.split("=", 1)[1] == "EVAL_CUPY_POOL_LIMIT_GB":
+                    raise ValueError("env unsets declared CuPy pool")
+                cursor += 1
+                continue
+            if token.startswith("-"):
+                # -i/--ignore-environment/-S and unrecognized options can erase
+                # or reinterpret the inherited pool; require an explicit wrapper.
+                raise ValueError("unsupported env option for declared CuPy pool")
+            if "=" not in token:
+                break
+            key, value = token.split("=", 1)
+            if key == "EVAL_CUPY_POOL_LIMIT_GB":
+                check(value)
+            cursor += 1
+    for i, token in enumerate(command):
+        if token == "--cupy-pool-limit-gb":
+            if i + 1 >= len(command):
+                raise ValueError("missing explicit CuPy pool value")
+            check(command[i + 1])
+        elif token.startswith("--cupy-pool-limit-gb="):
+            check(token.split("=", 1)[1])
+
+
 def valid_number(value):
     return (
         not isinstance(value, bool)
@@ -123,6 +185,7 @@ def guarded_exec(requirements, command):
     job = {"gpu_memory": requirements}
     try:
         resources(job)
+        validate_command_pool(job, command)
         device = probe()
         ok, reason = admit(job, device, phase="execute")
     except (ValueError, OSError, RuntimeError) as e:

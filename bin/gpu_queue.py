@@ -202,15 +202,10 @@ def cmd_submit(a: argparse.Namespace) -> None:
         gpu_memory.resources({"gpu_memory": memory})
     except ValueError as e:
         raise SystemExit(str(e)) from e
-    if "cupy_pool_limit_gib" in memory:
-        for i, token in enumerate(a.command):
-            value = None
-            if token == "--cupy-pool-limit-gb" and i + 1 < len(a.command):
-                value = a.command[i + 1]
-            elif token.startswith("--cupy-pool-limit-gb="):
-                value = token.split("=", 1)[1]
-            if value is not None and float(value) != memory["cupy_pool_limit_gib"]:
-                raise SystemExit("command pool contradicts GPU memory metadata")
+    try:
+        gpu_memory.validate_command_pool({"gpu_memory": memory}, a.command)
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
     syncs = a.sync or []
     missing = missing_sync_paths(syncs)
     if missing and not getattr(a, "allow_missing_sync", False):

@@ -149,3 +149,13 @@ programs must implement that contract themselves. Explicit contradictory
 `--cupy-pool-limit-gb` command arguments reject at submit. No host-global pool is
 raised. Jobs without metadata retain previous execution behavior. Existing
 cluster/LAN concurrency limits remain unchanged.
+
+For declared pools, both submission and allocated execution reject known immediate
+`env EVAL_CUPY_POOL_LIMIT_GB=...` overrides unless they match the declaration.
+Matching numeric values are allowed and argv is never silently rewritten.
+Known `--cupy-pool-limit-gb` overrides receive the same check at both boundaries,
+including persisted/manual job records. Environment-clearing/unsetting or
+unrecognized immediate `env` options fail closed for a declared pool. This does
+not parse the interior of `bash -c`, Python code, or scripts: those frozen runners
+remain responsible for honoring the pool contract and asserting their effective
+backend limit. Memory admission is not a sandbox for arbitrary user code.
