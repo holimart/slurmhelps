@@ -87,6 +87,8 @@ while true; do
   # scripts/, outputs/hpc/<job>/, and every repo path the command names (+ the directory of each .py, for
   # sibling imports / arm lookup). --update never overwrites newer mirror files; big data files are skipped.
   sync=(); [ -d scripts ] && sync+=(scripts); [ -d "outputs/hpc/$job" ] && sync+=("outputs/hpc/$job")
+  # cluster.sync_always: shared inputs a job reads indirectly (e.g. parent arms named inside a card.json).
+  for t in ${SH_SYNC_ALWAYS:-}; do [ -e "$t" ] && sync+=("$t"); done
   for t in $run_cmd; do
     t=${t#*=}
     case "$t" in outputs/*|scripts/*)

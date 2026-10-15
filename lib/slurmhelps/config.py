@@ -51,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
         "venv": ".venv",  # mirror-relative venv; slurmhelps.pth is installed into it
         "job_prefix": "sh-",  # our job names start with this
         "max_jobs": 1,  # at most this many of our jobs queued or running
+        "sync_always": [],  # project-relative paths hpc_chain.sh ships with EVERY job (e.g. shared parent arms)
         "gres": "gpu:1",
         "cpus": 4,
         "mem": "16G",
@@ -329,6 +330,7 @@ def shell_vars(cfg: dict) -> dict[str, str]:
         "SH_VENV": c["venv"],
         "SH_PREFIX": c["job_prefix"],
         "SH_MAX_JOBS": str(c["max_jobs"]),
+        "SH_SYNC_ALWAYS": words(c["sync_always"]),
         "SH_GRES": c["gres"],
         "SH_CPUS": str(c["cpus"]),
         "SH_MEM": c["mem"],
