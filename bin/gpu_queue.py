@@ -54,7 +54,8 @@ from pathlib import Path
 
 SLURMHELPS_HOME = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SLURMHELPS_HOME / "lib"))
-from slurmhelps import config as _config  # noqa: E402
+from slurmhelps import config as _config
+from slurmhelps import gpu_memory
 
 CONFIG = _config.load()
 ROOT = Path(CONFIG["_root"])
@@ -194,6 +195,22 @@ def submit_refusal(job: dict, rows: list[dict], lane: str, now: dt.datetime) -> 
 def cmd_submit(a: argparse.Namespace) -> None:
     if not a.command:
         raise SystemExit("give the command after `--`")
+    memory = {
+        k: getattr(a, k) for k in gpu_memory.FIELDS if getattr(a, k, None) is not None
+    }
+    try:
+        gpu_memory.resources({"gpu_memory": memory})
+    except ValueError as e:
+        raise SystemExit(str(e)) from e
+    if "cupy_pool_limit_gib" in memory:
+        for i, token in enumerate(a.command):
+            value = None
+            if token == "--cupy-pool-limit-gb" and i + 1 < len(a.command):
+                value = a.command[i + 1]
+            elif token.startswith("--cupy-pool-limit-gb="):
+                value = token.split("=", 1)[1]
+            if value is not None and float(value) != memory["cupy_pool_limit_gib"]:
+                raise SystemExit("command pool contradicts GPU memory metadata")
     syncs = a.sync or []
     missing = missing_sync_paths(syncs)
     if missing and not getattr(a, "allow_missing_sync", False):
@@ -244,10 +261,16 @@ def cmd_submit(a: argparse.Namespace) -> None:
         "command": a.command,
         "submitted": now(),
     }
+    if memory:
+        job["gpu_memory"] = memory
     if hashes:
         job["input_sha256"] = hashes
     (d["pending"] / f"{job_id}.json").write_text(json.dumps(job, indent=1))
-    print(json.dumps({"submitted": job_id, "position": len(list(d["pending"].glob("*.json")))}))
+    print(
+        json.dumps(
+            {"submitted": job_id, "position": len(list(d["pending"].glob("*.json")))}
+        )
+    )
 
 
 def _load_all() -> list[dict]:
@@ -280,6 +303,7 @@ def cmd_status(a: argparse.Namespace) -> None:
             f"lane={r.get('lane', '')} started={r.get('started', '-')} "
             f"finished={r.get('finished', '-')}"
             + (f" via={r['claimed_by']}" if r.get("claimed_by") else "")
+            + (f" gpu_memory={r['gpu_memory']}" if r.get("gpu_memory") else "")
         )
     if not rows:
         print("no jobs")
@@ -346,9 +370,34 @@ def finish_job(d: dict[str, Path], job: dict, code: int, log_text: str | None = 
     (d["running"] / f"{job_id}.json").unlink(missing_ok=True)
 
 
+def lan_device():
+    """Bounded read-only probe; no sync, claim or remote filesystem mutation."""
+    try:
+        r = subprocess.run(
+            ["bash", str(GPU_RUN), "--memory-status"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=True,
+        )
+        return gpu_memory.parse_probe(r.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
+def pick_for_lan(jobs):
+    if not any(j.get("gpu_memory") for j in jobs):
+        return jobs
+    device = lan_device()
+    return gpu_memory.eligible_in_order(jobs, device, phase="execute")
+
+
 def run_one(job: dict, d: dict[str, Path]) -> None:
     job_id = job["id"]
     run_log = d["running"] / f"{job_id}.log"
+    if job.get("gpu_memory") and not pick_for_lan([job]):
+        return
     claimed = claim_job(d, job_id)
     if claimed is None:  # the cluster bridge (or another runner) took it first
         print(f"{now()} skip {job_id}: claimed elsewhere", flush=True)
@@ -358,12 +407,21 @@ def run_one(job: dict, d: dict[str, Path]) -> None:
     # live file mid-run used to break the job (exit 2). GPU_RUN_ROOT keeps the repo root.
     snap = d["running"] / f"{job_id}.sh"
     shutil.copy2(GPU_RUN, snap)
-    env = {**os.environ, "GPU_RUN_ROOT": str(ROOT), "SLURMHELPS_HOME": str(SLURMHELPS_HOME)}
+    env = {
+        **os.environ,
+        "GPU_RUN_ROOT": str(ROOT),
+        "SLURMHELPS_HOME": str(SLURMHELPS_HOME),
+    }
     argv = ["bash", str(snap), "--name", job["name"]]
     for s in job.get("sync", []):
         argv += ["--sync", s]
     for p in job.get("pull", []):
         argv += ["--pull", p]
+    if job.get("gpu_memory"):
+        argv += [
+            "--gpu-memory-json",
+            json.dumps(job["gpu_memory"], separators=(",", ":")),
+        ]
     argv += ["--", *normalize_command(job["command"])]
     with run_log.open("w") as fh:
         fh.write(f"# gpu_queue run {job['started']} {shlex.join(argv)}\n")
@@ -408,12 +466,18 @@ def cmd_run(a: argparse.Namespace) -> None:
         if not pending:
             time.sleep(a.poll)
             continue
-        try:
-            job = json.loads(pending[0].read_text())
-        except json.JSONDecodeError:
-            pending[0].rename(d["done"] / (pending[0].stem + ".broken.json"))
+        jobs = []
+        for path in pending:
+            try:
+                jobs.append(json.loads(path.read_text()))
+            except (json.JSONDecodeError, FileNotFoundError):
+                if path.exists():
+                    path.rename(d["done"] / (path.stem + ".broken.json"))
+        eligible = pick_for_lan(jobs)
+        if not eligible:
+            time.sleep(a.poll)
             continue
-        run_one(job, d)
+        run_one(eligible[0], d)
 
 
 def main() -> None:
@@ -424,6 +488,8 @@ def main() -> None:
     s = sub.add_parser("submit")
     s.add_argument("--name", required=True)
     s.add_argument("--lane")
+    for field in gpu_memory.FIELDS:
+        s.add_argument("--" + field.replace("_", "-"), type=float, default=None)
     s.add_argument(
         "--priority",
         choices=("high", "normal", "low"),

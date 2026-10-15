@@ -57,6 +57,11 @@ SSHOPTS="-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-n
 SSH=(ssh $SSHOPTS "$HOST")
 RSYNC=(rsync -az -e "ssh $SSHOPTS")
 
+if [[ "${1:-}" == "--memory-status" ]]; then
+  "${SSH[@]}" "nvidia-smi --id=$SH_GPU_DEVICE --query-gpu=memory.total,memory.free --format=csv,noheader,nounits"
+  exit $?
+fi
+
 if [[ "${1:-}" == "--status" ]]; then
   "${SSH[@]}" "nvidia-smi --query-gpu=name,memory.used,memory.total,utilization.gpu --format=csv,noheader; uptime; free -g | sed -n 2p; ls $BASE/runs 2>/dev/null | tail -5; pgrep -af '$BASE/.venv' | grep -v pgrep | cut -c1-120"
   exit 0
@@ -66,10 +71,11 @@ if [[ "${1:-}" == "--log" ]]; then
   exit 0
 fi
 
-name=""; syncs=(); pulls=()
+name=""; syncs=(); pulls=(); gpu_memory_json=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name) name=$2; shift 2 ;;
+    --gpu-memory-json) gpu_memory_json=$2; shift 2 ;;
     --sync) syncs+=("$2"); shift 2 ;;
     --pull) pulls+=("$2"); shift 2 ;;
     --) shift; break ;;
@@ -107,8 +113,13 @@ done
 for d in "${pulls[@]}"; do "${SSH[@]}" "mkdir -p $BASE/repo/$d"; done
 
 # One job at a time on the host (flock on the base dir), thread caps, GPU 0.
+if [[ -n "$gpu_memory_json" ]]; then
+  set -- "$PY" -m slurmhelps.gpu_memory --requirements "$gpu_memory_json" -- "$@"
+fi
 cmd=$(printf ' %q' "$@")
-"${SSH[@]}" "cd $BASE/repo && flock $BASE/.job.lock env OMP_NUM_THREADS=$T MKL_NUM_THREADS=$T OPENBLAS_NUM_THREADS=$T NUMEXPR_NUM_THREADS=$T CUDA_VISIBLE_DEVICES=$SH_GPU_DEVICE PATH=$BASE/.venv/bin:\$PATH PYTHONPATH=$BASE/repo/scripts:$BASE/slurmhelps/lib nohup bash -c \"$cmd\" > $BASE/runs/$name/log.txt 2>&1; echo \$? > $BASE/runs/$name/exit.txt; cat $BASE/runs/$name/exit.txt"
+# Quote the complete inner program once for the remote shell, preserving JSON/quotes.
+remote_inner=$(printf '%q' "$cmd")
+"${SSH[@]}" "cd $BASE/repo && flock $BASE/.job.lock env OMP_NUM_THREADS=$T MKL_NUM_THREADS=$T OPENBLAS_NUM_THREADS=$T NUMEXPR_NUM_THREADS=$T CUDA_VISIBLE_DEVICES=$SH_GPU_DEVICE PATH=$BASE/.venv/bin:\$PATH PYTHONPATH=$BASE/repo/scripts:$BASE/slurmhelps/lib nohup bash -c $remote_inner > $BASE/runs/$name/log.txt 2>&1; echo \$? > $BASE/runs/$name/exit.txt; cat $BASE/runs/$name/exit.txt"
 # Bring the remote command's own output back so queue users (who cannot ssh) can read it.
 echo "# ---- remote log ($BASE/runs/$name/log.txt, last 200 lines) ----"
 "${SSH[@]}" "tail -n 200 $BASE/runs/$name/log.txt" || true

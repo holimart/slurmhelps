@@ -119,3 +119,33 @@ Defaults for `image/workset.py`; the project's `.langywrap/lanes.json` `fleet.wo
 overrides them key by key and is the only place `enabled` is read. Placeholders: `{project}`,
 `{project_name}`, `{work_root}`, `{images}`, `{node_tmp}`, `{uid}`. Keys and defaults: see
 `DEFAULTS` in `image/workset.py` and `image/README.md`.
+
+### Per-job GPU memory admission
+
+Queue submit accepts optional `--min-vram-gib`, `--min-free-vram-gib`, and
+`--cupy-pool-limit-gib`. Values use GiB (2^30 bytes), must be finite positive
+numbers, and are stored in `gpu_memory`. The pool requires a free-memory guard
+and cannot exceed it. Minimum total VRAM is a lower bound, so a free requirement
+may exceed it; routing uses the maximum requirement. For example, a 48GB-class
+L40 job can request `--min-vram-gib 44 --min-free-vram-gib 42
+--cupy-pool-limit-gib 40`. Advertised 48GB is not 48GiB.
+
+The LAN runner filters incompatible pending rows before atomic claim and scans
+past them without changing priority. It probes again immediately before claiming,
+then checks actual total/free memory inside the existing remote job flock.
+The cluster bridge preserves its existing lane fairness and claim protocol, but
+constrained rows require `queue.bridge_gpu_vram_gib` to describe a conservative
+minimum capacity across **all** GPUs allowed by the cluster routing config.
+The default is `null` (unknown), so constrained rows are not bridged until that
+capacity is explicitly configured. This field does not select a GPU model or
+change cluster limits. Keep allowed/excluded GPU routing consistent with it.
+Allocated jobs recheck actual memory before executing the model command.
+
+If available memory drops after routing, the execution guard exits 78 and the
+job finishes once; it is not automatically retried. Guard observations and the
+effective requested pool are logged. Per-job pool settings export
+`EVAL_CUPY_POOL_LIMIT_GB`, which supported evaluators must honor; arbitrary child
+programs must implement that contract themselves. Explicit contradictory
+`--cupy-pool-limit-gb` command arguments reject at submit. No host-global pool is
+raised. Jobs without metadata retain previous execution behavior. Existing
+cluster/LAN concurrency limits remain unchanged.

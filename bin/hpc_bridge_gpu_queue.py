@@ -142,7 +142,18 @@ def remote_run_cmd(job: dict, local_root: Path = ROOT) -> str:
     jn = cluster_job_name(job)
     logdir = f"{HPC_DIR}/{jn}"
     mk = " ".join(shlex.quote(p) for p in [logdir, *job.get("pull", [])])
-    inner = shlex.join(translate_command(job["command"], local_root))
+    command = translate_command(job["command"], local_root)
+    if job.get("gpu_memory"):
+        command = [
+            "python",
+            "-m",
+            "slurmhelps.gpu_memory",
+            "--requirements",
+            json.dumps(job["gpu_memory"], separators=(",", ":")),
+            "--",
+            *command,
+        ]
+    inner = shlex.join(command)
     return (
         f"mkdir -p {mk}; rc=0; "
         f"env PATH={MIRROR}/{VENV}/bin:$PATH OMP_NUM_THREADS={THREADS} MKL_NUM_THREADS={THREADS} "
@@ -310,12 +321,14 @@ def recent_bridged_lanes(d: dict[str, Path], now: dt.datetime | None = None) -> 
 
 def pick_for_bridge(d: dict[str, Path]) -> list[dict]:
     """Candidates in pick order, with the long-job gate applied from the current chain state."""
-    return pick_oldest(
+    ordered = pick_oldest(
         load_pending(d),
         recent_lanes=recent_bridged_lanes(d),
         skip_long=chain_recently_active(),
         history=bridge_runtime_history(),
     )
+    device = {"total_gib": CONFIG["queue"].get("bridge_gpu_vram_gib")}
+    return gpu_queue.gpu_memory.eligible_in_order(ordered, device, phase="route")
 
 
 def load_pending(d: dict[str, Path]) -> list[dict]:

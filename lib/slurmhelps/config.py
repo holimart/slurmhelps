@@ -87,6 +87,7 @@ DEFAULTS: dict[str, Any] = {
         "dir": ".langywrap/gpu-queue",
         "bridge_note": "ran on the cluster via bridge",
         "bridge_default_minutes": 90,
+        "bridge_gpu_vram_gib": None,  # conservative capacity of ALL bridge-eligible GPUs; constrained jobs fail closed until configured
         "bridge_max_sync_gb": 2,
         "lan_host_label": "LAN GPU host",
     },
