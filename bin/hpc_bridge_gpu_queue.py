@@ -29,6 +29,13 @@ nonzero exit and a `bridge_error` reason. SIGTERM/SIGINT are handled the same wa
   python3 ../slurmhelps/bin/hpc_bridge_gpu_queue.py            # run one job (exit 0 ran, 10 nothing to do)
   python3 ../slurmhelps/bin/hpc_bridge_gpu_queue.py --dry-run  # show the plan for the oldest pending job
 
+For a reviewed spare-capacity dispatch, run this helper independently of the chain with
+--active-job-limit 4 (for example, leaving two slots of a six-job fleet reserved).
+It runs at most one job under the same bridge lock and atomic LAN claim. The configured
+cluster.max_jobs remains the upper bound; hpc_run also performs its normal admission check.
+The default chain invocation remains idle-only. Running this as a separate worker keeps
+the chain free to notice new steward rows while this helper waits for its single job.
+
 Long-job gate: a job whose expected runtime (declared minutes, else the median bridge run time of
 its name family in outputs/hpc/bridge.log, else unknown = short) exceeds LONG_JOB_MINUTES is only
 picked while the steward chain is idle (see chain_recently_active); otherwise the oldest short job
@@ -550,9 +557,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--dry-run", action="store_true", help="print the plan; claim nothing")
     ap.add_argument(
+        "--active-job-limit", type=int, default=1,
+        help="opt in to dispatch below this active wb-job count (default: idle only); cannot exceed cluster.max_jobs",
+    )
+    ap.add_argument(
         "--no-size-check", action="store_true", help="dry-run: skip the rsync size probe"
     )
     a = ap.parse_args(argv)
+    if not 1 <= a.active_job_limit <= int(_C["max_jobs"]):
+        ap.error("--active-job-limit must be between 1 and cluster.max_jobs")
     d = gpu_queue.dirs()
 
     if a.dry_run:
@@ -595,8 +608,9 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGHUP, on_signal)
     recover_stale(d)
     try:
-        if our_cluster_jobs() > 0:
-            print(f"a {PREFIX}* job is queued/running; bridge idle")
+        active_jobs = our_cluster_jobs()
+        if active_jobs >= a.active_job_limit:
+            print(f"{active_jobs} {PREFIX}* jobs queued/running; bridge limit {a.active_job_limit}, idle")
             return EXIT_NOTHING
     except (RuntimeError, subprocess.TimeoutExpired) as e:
         print(f"cannot read squeue ({e}); bridge idle")

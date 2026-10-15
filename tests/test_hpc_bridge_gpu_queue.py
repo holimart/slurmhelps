@@ -341,6 +341,38 @@ def test_main_bridge_run_takes_fair_lane_first(repo, monkeypatch):
 # ---- long-job gate -------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("argv,active,dispatch", [
+    ([], 1, False),
+    (["--active-job-limit", "4"], 3, True),
+    (["--active-job-limit", "4"], 4, False),
+    (["--active-job-limit", "6"], 6, False),
+])
+def test_capacity_opt_in_keeps_atomic_claim_and_default_idle_policy(repo, monkeypatch, argv, active, dispatch):
+    monkeypatch.setitem(bridge._C, "max_jobs", 6)
+    d = gpu_queue.dirs()
+    make_job(d, "5-ready", "2026-10-10T09:00:00+00:00")
+    monkeypatch.setattr(bridge, "recover_stale", lambda *_: None)
+    monkeypatch.setattr(bridge, "our_cluster_jobs", lambda: active)
+    picked = []
+    def run_claimed(d_, job, out=print):
+        assert not (d_["pending"] / "5-ready.json").exists()
+        assert json.loads((d_["running"] / "5-ready.json").read_text())["claimed_by"] == "hpc-bridge"
+        picked.append(job["id"])
+        return 0
+    monkeypatch.setattr(bridge, "run_job", run_claimed)
+    assert bridge.main(argv) == (0 if dispatch else bridge.EXIT_NOTHING)
+    assert picked == (["5-ready"] if dispatch else [])
+    assert (d["pending"] / "5-ready.json").exists() is not dispatch
+
+
+@pytest.mark.parametrize("limit", ["0", "7"])
+def test_capacity_option_cannot_disable_or_exceed_configured_cap(repo, monkeypatch, limit):
+    monkeypatch.setitem(bridge._C, "max_jobs", 6)
+    with pytest.raises(SystemExit) as exc:
+        bridge.main(["--active-job-limit", limit])
+    assert exc.value.code == 2
+
+
 def _hpc(repo):
     p = repo / "outputs" / "hpc"
     p.mkdir(parents=True, exist_ok=True)
