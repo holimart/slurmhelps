@@ -77,10 +77,14 @@ def validate_command_pool(job, command):
     import os
 
     r = resources(job)
-    if "cupy_pool_limit_gib" not in r:
+    if not r:
         return
     if not command or not all(isinstance(x, str) for x in command):
         raise ValueError("invalid constrained command argv")
+    if "=" in command[0]:
+        raise ValueError("leading assignment is not an executable; use explicit env")
+    if "cupy_pool_limit_gib" not in r:
+        return
     expected = r["cupy_pool_limit_gib"]
 
     def check(value):

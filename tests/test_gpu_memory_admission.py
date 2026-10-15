@@ -338,7 +338,39 @@ def test_supported_same_pool_and_legacy():
             m.validate_command_pool({"gpu_memory": BIG}, command)
 
 
-@pytest.mark.parametrize("prefix", [["env","--"],["/usr/bin/env"],["env","X=x","env"]])
+@pytest.mark.parametrize(
+    "prefix", [["env", "--"], ["/usr/bin/env"], ["env", "X=x", "env"]]
+)
 def test_env_launcher_forms_cannot_hide_override(prefix):
     with pytest.raises(ValueError):
-        m.validate_command_pool({'gpu_memory':BIG},[*prefix,"EVAL_CUPY_POOL_LIMIT_GB=80","python","never.py"])
+        m.validate_command_pool(
+            {"gpu_memory": BIG},
+            [*prefix, "EVAL_CUPY_POOL_LIMIT_GB=80", "python", "never.py"],
+        )
+
+
+@pytest.mark.parametrize("value", ["40", "50"])
+def test_leading_assignment_rejects_submit_and_runtime(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(q, "ROOT", tmp_path)
+    monkeypatch.setattr(q, "Q", tmp_path / "queue")
+    command = ["EVAL_CUPY_POOL_LIMIT_GB=" + value, "python", "never.py"]
+    a = argparse.Namespace(
+        name="leading",
+        lane="x",
+        priority="high",
+        command=command,
+        sync=[],
+        pull=[],
+        force=True,
+        **BIG,
+    )
+    with pytest.raises(SystemExit, match="leading assignment"):
+        q.cmd_submit(a)
+    monkeypatch.setattr(m, "probe", lambda: pytest.fail("must reject before probe"))
+    monkeypatch.setattr(os, "execvpe", lambda *a: pytest.fail("must not exec"))
+    assert m.guarded_exec(BIG, command) == 78
+    assert not (tmp_path / "queue/pending").exists()
+    # Metadata-absent behavior is unchanged; no shell syntax is silently rewritten.
+    m.validate_command_pool({}, command)
+    with pytest.raises(ValueError, match="leading assignment"):
+        m.validate_command_pool({"gpu_memory":{"min_vram_gib":8}},command)
