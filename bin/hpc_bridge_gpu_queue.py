@@ -23,15 +23,18 @@ exists (the steward switches the bridge on/off with that file). One call = at mo
      {output} (-> outputs/hpc/<job>/eval.json) and its log to outputs/hpc/<job>/remote.log;
   6. rsync each --pull dir back to the same local path (where gpu_run.sh would have put it) and
      finish the job in done/ with the remote exit code and note 'ran on troja L40S via bridge'.
-Any failure before submission releases the job; any failure after it marks the job done with a
-nonzero exit and a `bridge_error` reason. SIGTERM/SIGINT are handled the same way.
+Failures before submission release the job. Owned submissions without a terminal receipt remain
+reserved for explicit reconciliation; they are never automatically resubmitted.
 
   python3 ../slurmhelps/bin/hpc_bridge_gpu_queue.py            # run one job (exit 0 ran, 10 nothing to do)
   python3 ../slurmhelps/bin/hpc_bridge_gpu_queue.py --dry-run  # show the plan for the oldest pending job
 
 For a reviewed spare-capacity dispatch, run this helper independently of the chain with
 --active-job-limit 4 (for example, leaving two slots of a six-job fleet reserved).
-It runs at most one job under the same bridge lock and atomic LAN claim. The configured
+It runs at most one job under the same bridge lock and atomic LAN claim.
+Add --concurrent to opt into independently running workers sharing a short admission lock,
+durable inherited owner leases and not-yet-visible slot reservations. Default remains serial.
+See docs/concurrent-bridge.md for the reviewed rollout and reconciliation boundary. The configured
 cluster.max_jobs remains the upper bound; hpc_run also performs its normal admission check.
 The default chain invocation remains idle-only. Running this as a separate worker keeps
 the chain free to notice new steward rows while this helper waits for its single job.
@@ -58,6 +61,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gpu_queue  # noqa: E402
+import bridge_dispatch as dispatch  # noqa: E402
+
+WORKER_LEASE_FD = None
 
 CONFIG = gpu_queue.CONFIG
 ROOT = gpu_queue.ROOT
@@ -344,10 +350,11 @@ def load_pending(d: dict[str, Path]) -> list[dict]:
 def set_stage(d: dict[str, Path], job: dict, stage: str, **extra) -> None:
     job["bridge_stage"] = stage
     job.update(extra)
-    (d["running"] / f"{job['id']}.json").write_text(json.dumps(job, indent=1))
+    dispatch.atomic_json(d["running"] / f"{job['id']}.json", job)
 
 
 def release(d: dict[str, Path], job: dict, reason: str) -> None:
+    job.pop("bridge_owner", None)
     gpu_queue.release_job(d, job, reason)
     # mark who released it so pick_oldest can cool it down
     p = d["pending"] / f"{job['id']}.json"
@@ -363,8 +370,16 @@ def fail(d: dict[str, Path], job: dict, code: int, reason: str, log: list[str]) 
     gpu_queue.finish_job(d, job, code, "\n".join(log) + "\n")
 
 
-def recover_stale(d: dict[str, Path], out=print) -> None:
-    """Under the bridge lock, any running/ claim by the bridge belongs to a dead bridge."""
+def ambiguous_failure(d, job, stage, code, reason, log):
+    """A missing terminal receipt cannot prove an accepted allocation stopped."""
+    if job.get("bridge_owner") is not None:
+        set_stage(d, job, stage, bridge_error=reason, bridge_reconcile_required=True)
+        return
+    fail(d, job, code, reason, log)
+
+
+def recover_stale(d: dict[str, Path], out=print, *, legacy_live=False) -> None:
+    """Respect live/unknown owners; ambiguous submitted work is never requeued."""
     for p in sorted(d["running"].glob("*.json")):
         try:
             job = json.loads(p.read_text())
@@ -372,6 +387,18 @@ def recover_stale(d: dict[str, Path], out=print) -> None:
             continue
         if job.get("claimed_by") != CLAIMED_BY:
             continue
+        owner = job.get("bridge_owner")
+        if owner is not None:
+            status = dispatch.owner_status(d, owner)
+            if status == "unknown":
+                raise RuntimeError("bridge owner liveness unknown: " + job["id"])
+            if status == "alive":
+                continue
+            if job.get("bridge_stage") in ("submitted", "pulling"):
+                out("orphan submitted reservation retained for explicit reconciliation: " + job["id"])
+                continue
+        elif legacy_live:
+            continue  # An older serial worker holds bridge.lock for its whole run.
         stage = job.get("bridge_stage", "claimed")
         if stage not in ("submitted", "pulling"):
             release(d, job, f"stale bridge claim (stage {stage}) released")
@@ -397,6 +424,13 @@ def ssh(cmd: str, timeout: float = 120) -> subprocess.CompletedProcess:
     )
 
 
+def our_cluster_job_names() -> list[str]:
+    r = ssh(f'squeue -h -u {USER} -o "%j"')
+    if r.returncode != 0:
+        raise RuntimeError(f"squeue failed: {r.stderr.strip()}")
+    return [line.strip() for line in r.stdout.splitlines() if line.strip()]
+
+
 def our_cluster_jobs() -> int:
     r = ssh(f'squeue -h -u {USER} -o "%j"')
     if r.returncode != 0:
@@ -419,6 +453,7 @@ def transfer_bytes(job: dict) -> int:
     """Bytes rsync would send to the mirror (delta vs what is already there)."""
     r = subprocess.run(
         rsync_up_argv(sync_paths(job), dry=True),
+        **dispatch.inherited_lease(WORKER_LEASE_FD),
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -451,6 +486,7 @@ def pull_back(job: dict, log: list[str]) -> None:
             capture_output=True,
             text=True,
             timeout=3600,
+            **dispatch.inherited_lease(WORKER_LEASE_FD),
         )
         if r.returncode != 0:
             log.append(f"# pull of {rel} failed (rsync exit {r.returncode}): {r.stderr.strip()}")
@@ -472,7 +508,7 @@ def describe(job: dict) -> list[str]:
 
 
 def run_job(d: dict[str, Path], job: dict, out=print) -> int:
-    """Run a claimed job end to end; always leaves it released or in done/. Returns exit code."""
+    """Run one claim; ambiguous owned submissions remain reserved for reconciliation."""
     jn = cluster_job_name(job)
     log = [f"# hpc_bridge run {gpu_queue.now()} (cluster, {PREFIX}{jn})", *gpu_queue.input_drift(job)]
     stage = "claimed"
@@ -488,6 +524,7 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
         set_stage(d, job, "syncing")
         r = subprocess.run(
             rsync_up_argv(sync_paths(job), dry=False),
+            **dispatch.inherited_lease(WORKER_LEASE_FD),
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -510,6 +547,7 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
                 cwd=ROOT,
                 stdout=fh,
                 stderr=subprocess.STDOUT,
+                **dispatch.inherited_lease(WORKER_LEASE_FD),
             ).returncode
         stext = submit_log.read_text(errors="replace")
         if rc == 3 or "no suitable idle GPU node" in stext:
@@ -528,9 +566,10 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
             result = json.loads(res.read_text())
             code = int(result["exit"])
         except (OSError, ValueError, KeyError, TypeError):
-            fail(
+            ambiguous_failure(
                 d,
                 job,
+                stage,
                 rc or 125,
                 f"no exit file from the cluster (hpc_run rc {rc}; slurm timeout/cancel?), "
                 f"see {HPC_DIR}/{jn}.submit.log",
@@ -550,14 +589,15 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
             release(d, job, str(e))
             out(f"{gpu_queue.now()} bridge released {job['id']}: {e}")
             return -1
-        fail(d, job, 125, str(e), log)
+        ambiguous_failure(d, job, stage, 125, str(e), log)
         return 125
-    except BaseException as e:  # noqa: BLE001 - never leave a claim behind
+    except BaseException as e:  # noqa: BLE001 - preserve ambiguous submitted reservations
         reason = f"{type(e).__name__}: {e}"
         if stage in ("claimed", "syncing"):
             release(d, job, f"bridge error before submission: {reason}")
         else:
-            fail(d, job, 125, f"bridge error at stage {stage}: {reason}", log)
+            ambiguous_failure(d, job, stage, 125,
+                              f"bridge error at stage {stage}: {reason}", log)
         if isinstance(e, (Interrupted, KeyboardInterrupt)):
             raise
         out(f"{gpu_queue.now()} bridge error {job['id']}: {reason}")
@@ -569,6 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--dry-run", action="store_true", help="print the plan; claim nothing")
+    ap.add_argument("--concurrent", action="store_true", help="opt-in short admission lock and durable worker reservations; default remains serial")
     ap.add_argument(
         "--active-job-limit", type=int, default=1,
         help="opt in to dispatch below this active wb-job count (default: idle only); cannot exceed cluster.max_jobs",
@@ -607,41 +648,64 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    lock = (gpu_queue.Q / "bridge.lock").open("w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("another bridge is running")
-        return EXIT_NOTHING
+    return dispatch_one(d, a.active_job_limit, concurrent=a.concurrent)
+
+
+def dispatch_one(d, limit, *, concurrent=False):
+    global WORKER_LEASE_FD
+    legacy = None
+    if not concurrent:
+        legacy = (gpu_queue.Q / "bridge.lock").open("a")
+        try:
+            fcntl.flock(legacy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            legacy.close()
+            print("another bridge is running")
+            return EXIT_NOTHING
 
     def on_signal(signum, _frame):
         raise Interrupted(f"signal {signum}")
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGHUP, on_signal)
-    recover_stale(d)
     try:
-        active_jobs = our_cluster_jobs()
-        if active_jobs >= a.active_job_limit:
-            print(f"{active_jobs} {PREFIX}* jobs queued/running; bridge limit {a.active_job_limit}, idle")
+        with dispatch.WorkerLease(d) as worker:
+            WORKER_LEASE_FD = worker.fd
+            for _attempt in range(3):
+                try:
+                    with dispatch.admission_lock(d):
+                        if concurrent:
+                            with dispatch.legacy_probe(d) as legacy_live:
+                                recover_stale(d, legacy_live=legacy_live)
+                                reserved = dispatch.claims(d)
+                                occupied = dispatch.occupied_slots(
+                                    our_cluster_job_names(), reserved, PREFIX, cluster_job_name)
+                        else:
+                            recover_stale(d)
+                            reserved = dispatch.claims(d)
+                            occupied = our_cluster_jobs() + len(reserved)
+                        if occupied >= limit:
+                            print(f"{occupied} cluster allocations/reservations; bridge limit {limit}, idle")
+                            return EXIT_NOTHING
+                        job = None
+                        for candidate in pick_for_bridge(d):
+                            job = gpu_queue.claim_job(d, candidate["id"], CLAIMED_BY)
+                            if job is not None:
+                                break
+                        if job is None:
+                            return EXIT_NOTHING
+                        set_stage(d, job, "claimed", bridge_job=cluster_job_name(job),
+                                  bridge_owner=worker.owner)
+                except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                    print(f"cannot reserve bridge capacity ({exc}); idle")
+                    return EXIT_NOTHING
+                if run_job(d, job) != -1:
+                    return 0
             return EXIT_NOTHING
-    except (RuntimeError, subprocess.TimeoutExpired) as e:
-        print(f"cannot read squeue ({e}); bridge idle")
-        return EXIT_NOTHING
-    for _attempt in range(3):
-        cands = pick_for_bridge(d)
-        if not cands:
-            return EXIT_NOTHING
-        job = None
-        for c in cands:
-            job = gpu_queue.claim_job(d, c["id"], CLAIMED_BY)
-            if job is not None:
-                break
-        if job is None:
-            return EXIT_NOTHING
-        if run_job(d, job) != -1:
-            return 0
-    return EXIT_NOTHING
+    finally:
+        WORKER_LEASE_FD = None
+        if legacy is not None:
+            legacy.close()
 
 
 if __name__ == "__main__":
