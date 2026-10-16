@@ -221,3 +221,27 @@ os._exit(0)
     bridge.recover_stale(d)
     assert (d['running'] / 'owned-submit.json').exists()
     assert not list(d['pending'].glob('*.json'))
+
+
+def test_reservation_name_collision_preserves_multiplicity():
+    rows = [{'name': 'collision'}, {'name': 'collision'}]
+    name = lambda row: row['name']
+    assert dispatch.occupied_slots([], rows, 'wb-', name) == 2
+    assert dispatch.occupied_slots(['wb-collision'], rows, 'wb-', name) == 2
+    assert dispatch.occupied_slots(['wb-collision'] * 3, rows, 'wb-', name) == 3
+
+
+def test_dispatch_does_not_claim_colliding_output_name(repo, monkeypatch):
+    d = gpu_queue.dirs()
+    # Distinct IDs collide under the real eighty-character cluster-name truncation.
+    prefix = 'x' * 90
+    for jid in (prefix + 'one', prefix + 'two'):
+        make_job(d, jid, '2026-10-10T00:00:00+00:00')
+    job = gpu_queue.claim_job(d, prefix + 'one', 'hpc-bridge')
+    with dispatch.WorkerLease(d) as worker:
+        bridge.set_stage(d, job, 'claimed', bridge_owner=worker.owner)
+        monkeypatch.setattr(bridge, 'our_cluster_job_names', lambda: [])
+        monkeypatch.setattr(bridge, 'pick_for_bridge', lambda _: bridge.load_pending(d))
+        monkeypatch.setattr(bridge, 'run_job', lambda *_: pytest.fail('colliding output claimed'))
+        assert bridge.dispatch_one(d, 5, concurrent=True) == bridge.EXIT_NOTHING
+    assert len(list(d['pending'].glob('*.json'))) == 1

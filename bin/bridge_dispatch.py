@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections import Counter
 import fcntl
 import json
 import os
@@ -127,8 +128,11 @@ def claims(d):
 def occupied_slots(active_names, reserved, prefix, job_name):
     """Count actual allocations plus not-yet-visible reservations, without double count."""
     active = [name for name in active_names if name.startswith(prefix)]
-    absent = {prefix + job_name(row) for row in reserved} - set(active)
-    return len(active) + len(absent)
+    actual = Counter(active)
+    reservations = Counter(prefix + job_name(row) for row in reserved)
+    # One visible allocation can satisfy at most one reservation, even on name collisions.
+    absent = sum(max(count - actual[name], 0) for name, count in reservations.items())
+    return len(active) + absent
 
 
 def inherited_lease(fd):

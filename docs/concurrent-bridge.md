@@ -17,7 +17,9 @@ removed or helper restarted to activate this option.
 All new workers serialize census, reservation and atomic pending-to-running claim under
 `bridge-admission.lock`, then release that short lock before transfer/monitoring. Cluster
 names visible in squeue count once per allocation; reserved names not visible yet count
-as additional slots. Duplicate actual names remain separate allocations. Serial workers
+as additional slots. Duplicate actual names remain separate allocations. Reservation multiplicity is preserved
+with one-to-one matching against visible names; a pending job colliding with a reserved
+cluster output name is skipped. Serial workers
 conservatively count actual jobs plus reservations, possibly underfilling but never
 ignoring a reservation. Existing atomic LAN claims remain the authority for winning a
 pending job.

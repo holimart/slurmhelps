@@ -688,7 +688,10 @@ def dispatch_one(d, limit, *, concurrent=False):
                             print(f"{occupied} cluster allocations/reservations; bridge limit {limit}, idle")
                             return EXIT_NOTHING
                         job = None
+                        reserved_names = {cluster_job_name(row) for row in reserved}
                         for candidate in pick_for_bridge(d):
+                            if cluster_job_name(candidate) in reserved_names:
+                                continue  # Sanitization/truncation collision shares output paths.
                             job = gpu_queue.claim_job(d, candidate["id"], CLAIMED_BY)
                             if job is not None:
                                 break
