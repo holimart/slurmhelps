@@ -192,6 +192,16 @@ def submit_refusal(job: dict, rows: list[dict], lane: str, now: dt.datetime) -> 
     return None
 
 
+def _positive_minutes(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"--minutes must be an integer, got {text!r}") from e
+    if not 1 <= value <= 24 * 60:
+        raise argparse.ArgumentTypeError("--minutes must be between 1 and 1440")
+    return value
+
+
 def cmd_submit(a: argparse.Namespace) -> None:
     if not a.command:
         raise SystemExit("give the command after `--`")
@@ -258,6 +268,10 @@ def cmd_submit(a: argparse.Namespace) -> None:
     }
     if memory:
         job["gpu_memory"] = memory
+    minutes = getattr(a, "minutes", None)
+    if minutes is not None:
+        # Read by the Slurm bridge (job_minutes / declared_minutes) as the job's time limit.
+        job["minutes"] = minutes
     if hashes:
         job["input_sha256"] = hashes
     (d["pending"] / f"{job_id}.json").write_text(json.dumps(job, indent=1))
@@ -493,6 +507,13 @@ def main() -> None:
     )
     s.add_argument("--sync", action="append")
     s.add_argument("--pull", action="append")
+    s.add_argument(
+        "--minutes",
+        type=_positive_minutes,
+        default=None,
+        help="time limit in minutes when the bridge runs this job on Slurm "
+        "(default: queue.bridge_default_minutes, 90)",
+    )
     s.add_argument(
         "--allow-missing-sync",
         action="store_true",

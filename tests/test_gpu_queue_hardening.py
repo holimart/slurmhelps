@@ -81,6 +81,31 @@ def test_submit_keeps_interpreted_command(repo):
     assert "input_sha256" not in rec  # old record shape when nothing is hashed
 
 
+def test_submit_records_minutes_for_the_bridge(repo):
+    # whiteboxchallenge 2026-10-18: a lane could not ask for more than the bridge default
+    # (90 min), so a long oracle timed out on Slurm with no result.
+    args = submit_args(["python", "scripts/a.py"])
+    args.minutes = 240
+    gpu_queue.cmd_submit(args)
+    rec = pending_records(repo)[0]
+    assert rec["minutes"] == 240
+    sys.path.insert(0, str(ROOT / "bin"))
+    import hpc_bridge_gpu_queue as bridge
+
+    assert bridge.job_minutes(rec) == 240
+
+
+def test_submit_without_minutes_keeps_old_shape(repo):
+    gpu_queue.cmd_submit(submit_args(["python", "scripts/a.py"]))
+    assert "minutes" not in pending_records(repo)[0]
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "abc", "1441"])
+def test_minutes_flag_rejects_bad_values(bad):
+    with pytest.raises(argparse.ArgumentTypeError):
+        gpu_queue._positive_minutes(bad)
+
+
 # 2. candidate / baseline hashes ---------------------------------------------------------
 
 
