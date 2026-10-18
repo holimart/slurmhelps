@@ -68,6 +68,9 @@ _TERMINAL_STATES = {"COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "NODE_FAIL", 
 
 _SINFO_CMD = 'sinfo -h -N -o "%P|%N|%G|%t|%a"'
 _SCONTROL_CMD = "scontrol show partition -o"
+# GPUs in use per node. A "mix" node (CPUs partly allocated, often by CPU-only
+# jobs) can still have every GPU free, so node state alone is not enough.
+_SINFO_USED_CMD = 'sinfo -h -N -O "NodeList:60,GresUsed:120"'
 
 
 class HpcError(RuntimeError):
@@ -162,6 +165,34 @@ def _split_gpu(gres: str) -> tuple[str, str] | None:
     return None
 
 
+def _gpu_count(gres: str) -> int | None:
+    """Number of GPUs in a GRES string (``gpu:L40:2(S:0-1)`` -> 2), else ``None``."""
+    for entry in gres.split(","):
+        entry = entry.strip()
+        if not entry.startswith("gpu:"):
+            continue
+        last = entry.split("(", 1)[0].split(":")[-1]
+        return int(last) if last.isdigit() else None
+    return None
+
+
+def _load_gpus_used(ssh: str) -> dict[str, int]:
+    """Map node -> GPUs in use; nodes that fail to parse are left out."""
+    used: dict[str, int] = {}
+    try:
+        raw = run_ssh(ssh, _SINFO_USED_CMD)
+    except Exception:  # noqa: BLE001 - fall back to idle-only selection
+        return used
+    for line in raw.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        n = _gpu_count(parts[1])
+        if n is not None:
+            used[parts[0]] = n
+    return used
+
+
 def _gpu_rank(model: str, canonical: str, ranks: Mapping[str, int]) -> int:
     """Lowest rank whose key appears in the model (else ``DEFAULT_RANK``)."""
     best: int | None = None
@@ -242,6 +273,7 @@ def probe_gpus(
     allow_accounts = _load_allow_accounts(ssh) if (account and not allowed_partition) else {}
 
     raw = run_ssh(ssh, _SINFO_CMD)
+    gpus_used = _load_gpus_used(ssh)
     candidates: dict[str, Node] = {}
     for line in raw.splitlines():
         parts = line.split("|")
@@ -251,8 +283,15 @@ def probe_gpus(
         node = parts[1].strip()
         gres = parts[2].strip()
         state = parts[3].strip()
-        if not node or state != "idle":
+        if not node:
             continue
+        if state != "idle":
+            # "mix" qualifies only when sinfo shows a GPU still free on it.
+            total = _gpu_count(gres)
+            if state != "mix" or total is None or node not in gpus_used:
+                continue
+            if gpus_used[node] >= total:
+                continue
         if any(node.startswith(p) for p in exclude_node_prefix):
             continue
         parsed = _split_gpu(gres)

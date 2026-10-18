@@ -66,6 +66,31 @@ def test_probe_excludes_prefix_nonidle_and_gpu(monkeypatch: pytest.MonkeyPatch) 
     assert all(n.state == "idle" for n in nodes)
 
 
+def test_probe_accepts_mix_node_only_with_a_free_gpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    # "mix" = CPUs partly allocated; the GPUs may still be free (CPU-only jobs).
+    sinfo = "\n".join(
+        [
+            "gpu|mixFree|gpu:L40:2(S:0-1)|mix|up",
+            "gpu|mixPart|gpu:L40:2(S:0-1)|mix|up",
+            "gpu|mixFull|gpu:L40:2(S:0-1)|mix|up",
+            "gpu|mixUnknown|gpu:L40:1|mix|up",
+            "gpu|alloc|gpu:L40:2|allocated|up",
+        ]
+    )
+    used = "\n".join(
+        [
+            "mixFree      gpu:L40:0(IDX:N/A),vram:0",
+            "mixPart      gpu:L40:1(IDX:0),vram:0",
+            "mixFull      gpu:L40:2(IDX:0-1),vram:0",
+            "alloc        gpu:L40:0(IDX:N/A),vram:0",
+        ]
+    )
+    rec = _install(monkeypatch, sinfo)
+    rec.replies[gpu_batch._SINFO_USED_CMD] = used
+    nodes = gpu_batch.probe_gpus("user@host")
+    assert {n.node for n in nodes} == {"mixFree", "mixPart"}
+
+
 def test_probe_enforces_allow_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
     sinfo = "\n".join(
         [
