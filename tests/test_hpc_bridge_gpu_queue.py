@@ -474,3 +474,25 @@ def test_expected_minutes_declared_then_bridge_history(repo):
     assert not bridge.is_long({**fam_job, "minutes": 10}, hist)
     assert bridge.expected_minutes({"name": "never-seen"}, hist) is None  # unknown -> short
     assert not bridge.is_long({"name": "never-seen"}, hist)
+
+
+# whiteboxchallenge 2026-10-18/19: Slurm TIMEOUT/scancel runs the TERM trap, which writes
+# exit_code + terminated (hpc_partial finalize-failure), not "exit". The bridge must treat
+# that as a terminal receipt instead of leaving an orphan reservation.
+
+
+def test_terminal_exit_code_reads_normal_exit():
+    assert bridge.terminal_exit_code({"exit": 0}) == 0
+    assert bridge.terminal_exit_code({"exit": 2, "exit_code": 9}) == 2
+
+
+def test_terminal_exit_code_reads_trap_receipt():
+    rec = {"status": "failed", "exit_code": 143, "terminated": True, "log_tail": "x"}
+    assert bridge.terminal_exit_code(rec) == 143
+
+
+def test_terminal_exit_code_rejects_receiptless_doc():
+    with pytest.raises(KeyError):
+        bridge.terminal_exit_code({"status": "partial"})
+    with pytest.raises(KeyError):
+        bridge.terminal_exit_code({"exit_code": 1, "status": "partial", "terminated": False})

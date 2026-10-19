@@ -103,6 +103,21 @@ class Interrupted(Exception):
 # ---- pure parts ------------------------------------------------------------------------------
 
 
+def terminal_exit_code(result: dict) -> int:
+    """Exit code from a cluster eval.json, or KeyError when it carries none.
+
+    A normal finish writes ``exit``. A job stopped by Slurm (time limit, scancel) runs the
+    hpc_run.sh TERM trap, whose ``hpc_partial.py finalize-failure`` writes ``exit_code`` and
+    ``terminated: true`` instead. That is a terminal receipt too: reading only ``exit`` left
+    every timed-out job as an orphan reservation (whiteboxchallenge 2026-10-18/19, 3 jobs).
+    """
+    if "exit" in result:
+        return int(result["exit"])
+    if "exit_code" in result and (result.get("terminated") or result.get("status") == "failed"):
+        return int(result["exit_code"])
+    raise KeyError("exit")
+
+
 def job_minutes(job: dict) -> int:
     for key in ("minutes", "limit_minutes", "timeout_minutes"):
         v = job.get(key)
@@ -564,7 +579,7 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
             log.append("# ---- end remote log ----")
         try:
             result = json.loads(res.read_text())
-            code = int(result["exit"])
+            code = terminal_exit_code(result)
         except (OSError, ValueError, KeyError, TypeError):
             ambiguous_failure(
                 d,
