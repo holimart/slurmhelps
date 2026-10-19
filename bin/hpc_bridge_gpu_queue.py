@@ -84,6 +84,8 @@ DEFAULT_MINUTES = int(CONFIG["queue"]["bridge_default_minutes"])
 MAX_SYNC_GB = float(CONFIG["queue"]["bridge_max_sync_gb"])
 MAX_SYNC_BYTES = int(MAX_SYNC_GB * 1024**3)
 REFUSAL_COOLDOWN_H = 6
+#: A "cluster busy" refusal is transient: retry after this many hours (5 min).
+BUSY_RETRY_H = 5 / 60
 FAIRNESS_WINDOW_H = 1
 EXIT_NOTHING = 10
 LONG_JOB_MINUTES = 30  # expected runtime above this = a long job
@@ -306,9 +308,15 @@ def pick_oldest(
     for j in pending:
         rel = j.get("released") or {}
         if rel.get("by") == CLAIMED_BY and rel.get("at"):
+            # A busy cluster is transient: retry such a job after a short wait, not the full
+            # cooldown meant for jobs the bridge cannot run (missing sync, > 2 GB transfer).
+            # whiteboxchallenge 2026-10-19: a 'cluster busy' refusal parked a job for 6 h
+            # while L40s were free again minutes later.
+            busy = "cluster busy" in str(rel.get("reason", ""))
+            cooldown_h = BUSY_RETRY_H if busy else REFUSAL_COOLDOWN_H
             try:
                 at = dt.datetime.fromisoformat(rel["at"])
-                if now - at < dt.timedelta(hours=REFUSAL_COOLDOWN_H):
+                if now - at < dt.timedelta(hours=cooldown_h):
                     continue
             except ValueError:
                 pass

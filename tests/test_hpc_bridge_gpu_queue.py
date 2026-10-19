@@ -512,3 +512,19 @@ def test_slurm_terminal_code_maps_states(monkeypatch):
     assert bridge.slurm_terminal_code("wb-gq-x") is None
     monkeypatch.setattr(bridge, "ssh", fake("TIMEOUT\n", rc=1))
     assert bridge.slurm_terminal_code("wb-gq-x") is None
+
+
+def test_busy_refusal_retries_after_minutes_not_hours():
+    # whiteboxchallenge 2026-10-19: a transient 'cluster busy' refusal parked a job for 6 h.
+    now = dt.datetime(2026, 10, 10, 12, tzinfo=dt.UTC)
+    busy = {"by": "hpc-bridge", "reason": "cluster busy/no GPU (hpc_run rc 3)"}
+    other = {"by": "hpc-bridge", "reason": "rsync transfer 3.1 GB > 2 GB"}
+    jobs = [
+        {"id": "5-busy-old", "submitted": "2026-10-10T08:00:00+00:00",
+         "released": {**busy, "at": "2026-10-10T11:50:00+00:00"}},
+        {"id": "5-busy-new", "submitted": "2026-10-10T08:01:00+00:00",
+         "released": {**busy, "at": "2026-10-10T11:58:00+00:00"}},
+        {"id": "5-big", "submitted": "2026-10-10T08:02:00+00:00",
+         "released": {**other, "at": "2026-10-10T11:00:00+00:00"}},
+    ]
+    assert [j["id"] for j in bridge.pick_oldest(jobs, now)] == ["5-busy-old"]
