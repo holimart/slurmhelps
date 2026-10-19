@@ -496,3 +496,19 @@ def test_terminal_exit_code_rejects_receiptless_doc():
         bridge.terminal_exit_code({"status": "partial"})
     with pytest.raises(KeyError):
         bridge.terminal_exit_code({"exit_code": 1, "status": "partial", "terminated": False})
+
+
+def test_slurm_terminal_code_maps_states(monkeypatch):
+    def fake(out, rc=0):
+        return lambda cmd, timeout=120: subprocess.CompletedProcess(cmd, rc, out, "")
+
+    monkeypatch.setattr(bridge, "ssh", fake("TIMEOUT\n"))
+    assert bridge.slurm_terminal_code("wb-gq-x") == 124
+    monkeypatch.setattr(bridge, "ssh", fake("CANCELLED by 1000\n"))
+    assert bridge.slurm_terminal_code("wb-gq-x") == 130
+    monkeypatch.setattr(bridge, "ssh", fake("RUNNING\n"))
+    assert bridge.slurm_terminal_code("wb-gq-x") is None
+    monkeypatch.setattr(bridge, "ssh", fake(""))
+    assert bridge.slurm_terminal_code("wb-gq-x") is None
+    monkeypatch.setattr(bridge, "ssh", fake("TIMEOUT\n", rc=1))
+    assert bridge.slurm_terminal_code("wb-gq-x") is None

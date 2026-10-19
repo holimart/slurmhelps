@@ -446,6 +446,38 @@ def our_cluster_job_names() -> list[str]:
     return [line.strip() for line in r.stdout.splitlines() if line.strip()]
 
 
+#: Slurm states that mean the allocation has ended for good (sacct State, first word).
+SLURM_TERMINAL = {
+    "TIMEOUT": 124,
+    "CANCELLED": 130,
+    "FAILED": 1,
+    "OUT_OF_MEMORY": 137,
+    "NODE_FAIL": 125,
+    "PREEMPTED": 125,
+    "BOOT_FAIL": 125,
+    "DEADLINE": 124,
+}
+
+
+def slurm_terminal_code(cluster_name: str) -> int | None:
+    """Exit code for a cluster job that Slurm reports as ended badly, else None.
+
+    Used when no exit file came back: an allocation Slurm itself reports as TIMEOUT /
+    CANCELLED / FAILED is proof it stopped, so the job is finished instead of being kept as an
+    orphan reservation. Any doubt (ssh error, still running, unknown state) returns None.
+    """
+    try:
+        r = ssh(f"sacct -n -X --name {cluster_name} -o State --parsable2", timeout=60)
+    except Exception:  # noqa: BLE001 - any doubt keeps the old, conservative reservation
+        return None
+    if r.returncode != 0:
+        return None
+    states = [line.split()[0] for line in r.stdout.splitlines() if line.strip()]
+    if not states:
+        return None
+    return SLURM_TERMINAL.get(states[-1].rstrip("+"))
+
+
 def our_cluster_jobs() -> int:
     r = ssh(f'squeue -h -u {USER} -o "%j"')
     if r.returncode != 0:
@@ -581,6 +613,16 @@ def run_job(d: dict[str, Path], job: dict, out=print) -> int:
             result = json.loads(res.read_text())
             code = terminal_exit_code(result)
         except (OSError, ValueError, KeyError, TypeError):
+            slurm_code = slurm_terminal_code(PREFIX + jn)
+            if slurm_code is not None:
+                reason = (
+                    f"no exit file; Slurm reports the allocation ended (exit {slurm_code}), "
+                    f"see {HPC_DIR}/{jn}.submit.log"
+                )
+                job.pop("bridge_stage", None)
+                fail(d, job, slurm_code, reason, log)
+                out(f"{gpu_queue.now()} bridge done {job['id']} exit {slurm_code} (slurm terminal)")
+                return slurm_code
             ambiguous_failure(
                 d,
                 job,
