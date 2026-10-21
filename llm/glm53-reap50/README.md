@@ -268,6 +268,10 @@ server could allocate the 1M KV (health succeeded) or not (server_failed). For
 usable 128K+ context you need the FP8 v2 checkpoint plus a DSA-aware engine, not
 the GGUF fork.
 
+## Experiments
+
+- [2026-10-21 — REAP50 context sweep on 2× L40S 48 GB](experiments/2026-10-21-2x48gb-context-sweep.md) — measured 4K/16K/256K prefill and decode, plus the 64K/512K/1M limits. Raw table: [CSV](experiments/data/2026-10-21-2x48gb-context-results.csv) / [JSON](experiments/data/2026-10-21-2x48gb-context-results.json).
+
 ## Why this stack
 
 There is **no published multi-user benchmark for the REAP50 checkpoint itself**.
@@ -480,6 +484,7 @@ GPUs and leaving more room for KV/concurrency, not from a 2× faster token.
 | `bench.py` | stdlib-only batched benchmark client (`--self-test` for CI) |
 | `bench.sh` | config defaults around `bench.py` |
 | `context-sweep.sh` | long-context sweep: restart server per context, prefill/decode tok/s, per-point timeout |
+| `experiments/` | dated measurement write-ups and the raw CSV/JSON result tables |
 | `run-job.sh` | install → serve → wait → bench → stop, writes `job.json` |
 | `glm53-reap50.sbatch` | thin Slurm entry point |
 | `submit.sh` | fills partition/account/resources and submits |

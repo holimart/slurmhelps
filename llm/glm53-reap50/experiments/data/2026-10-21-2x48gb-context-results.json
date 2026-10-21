@@ -1,0 +1,86 @@
+{
+  "experiment": "2026-10-21-2x48gb-context-sweep",
+  "hardware": "2x L40S 48GB (96GB), 32 CPU, 256GB RAM",
+  "model": "GLM-5.3-Flash-REAP50 IQ4_XS",
+  "engine": "llama.cpp glm5-next-reap50-gguf-v1",
+  "results": [
+    {
+      "context": 4096,
+      "concurrency": 8,
+      "status": "ok",
+      "prefill_tokens_per_s": 1409.311,
+      "decode_tokens_per_s": 60.719,
+      "output_tokens_per_s": 34.519,
+      "ttft_s": 20.674,
+      "tpot_ms": 70.037,
+      "input_tokens": 30826,
+      "output_tokens": 1024,
+      "note": "q8_0 KV; 8 slots"
+    },
+    {
+      "context": 16384,
+      "concurrency": 4,
+      "status": "ok",
+      "prefill_tokens_per_s": 1613.597,
+      "decode_tokens_per_s": 23.832,
+      "output_tokens_per_s": 11.5,
+      "ttft_s": 36.854,
+      "tpot_ms": 58.671,
+      "input_tokens": 61767,
+      "output_tokens": 512,
+      "note": "q8_0 KV; 4 slots"
+    },
+    {
+      "context": 65536,
+      "concurrency": 2,
+      "status": "failed",
+      "prefill_tokens_per_s": null,
+      "decode_tokens_per_s": null,
+      "output_tokens_per_s": 0.0,
+      "ttft_s": null,
+      "tpot_ms": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "note": "compute-buffer OOM/segfault at ~45 GB/card; use C=1"
+    },
+    {
+      "context": 262144,
+      "concurrency": 1,
+      "status": "ok",
+      "prefill_tokens_per_s": 517.858,
+      "decode_tokens_per_s": 22.521,
+      "output_tokens_per_s": 0.3,
+      "ttft_s": 476.431,
+      "tpot_ms": 44.753,
+      "input_tokens": 246724,
+      "output_tokens": 128,
+      "note": "q8_0 KV; 1 slot"
+    },
+    {
+      "context": 524288,
+      "concurrency": 1,
+      "status": "timeout",
+      "prefill_tokens_per_s": null,
+      "decode_tokens_per_s": null,
+      "output_tokens_per_s": null,
+      "ttft_s": null,
+      "tpot_ms": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "note": "q8_0 cudaMalloc OOM; q4_0 + batch 512/128 not completed"
+    },
+    {
+      "context": 1048576,
+      "concurrency": 1,
+      "status": "timeout",
+      "prefill_tokens_per_s": 378.0,
+      "decode_tokens_per_s": null,
+      "output_tokens_per_s": null,
+      "ttft_s": null,
+      "tpot_ms": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "note": "server allocates with q4_0 + batch 512/128; ~30% prefill in 13 min, ~43 min total; 22.6 min point timeout"
+    }
+  ]
+}
