@@ -146,6 +146,58 @@ If `--quick` gives less than ~10 tok/s single-stream, the full sweep is not
 worth the allocation; check the build, the CUDA arch, and whether the model is
 actually fully offloaded (`-ngl 99`) before spending a longer job.
 
+## Context budget
+
+GLM-5.3-Flash is unusually cheap in KV because 34 of its 45 layers are KDA
+linear attention (fixed recurrent state, not per-token KV) and only the 11 DSA
+layers keep per-token MLA latents: 512 values per token per layer. Llama.cpp's
+GGUF path therefore uses roughly:
+
+| KV dtype | Per token | 8K | 32K | 128K | 1M |
+|---|---:|---:|---:|---:|---:|
+| BF16 | ~11 KB | 90 MB | 0.36 GB | 1.4 GB | 11 GB |
+| q8_0 | ~5.6 KB | 45 MB | 0.18 GB | 0.72 GB | 5.6 GB |
+| q4_0 | ~2.8 KB | 23 MB | 90 MB | 0.36 GB | 2.8 GB |
+
+**Context is not what needs big VRAM here; the weights are.** After loading:
+
+| Node | Weights | Free VRAM |
+|---|---|---:|---:|
+| 2×48 GB | Q4_K_S 87.1 / IQ4_XS 82.0 | ~9 / ~14 GB |
+| 2×80 GB | Q4_K_S 87.1 | ~73 GB |
+| 4×48 GB | Q4_K_S 87.1 | ~105 GB |
+| 4×32 GB V100 | Q4_K_S 87.1 | ~41 GB |
+
+Memory-wise, **1M tokens of q8_0 KV is only ~5.6 GB**, so it fits on every
+four-GPU configuration and on 2×80 GB. On 2×48 GB it is tight with Q4_K_S but
+fits with IQ4_XS for a single sequence. The real limits are compute and engine
+support:
+
+- **llama.cpp GGUF fork**: DSA is gated off, so the 11 sparse-attention layers
+  run dense O(n²). **8K** is the prune's assurance, **32K** is usable but slow
+  (the model card measured 236 s at 32K on CPU), and **128K+** fits memory but
+  is not practical for interactive/multi-user serving. 1M is not practical.
+- **4×L40 + FP8 v2 + a DSA-aware engine** (KTransformers, or SGLang/vLLM if
+  SM89 works): 128K–1M is memory-feasible, but prefill is still expensive and
+  KTransformers runs selected experts on the CPU.
+- **4×V100**: the same KV math fits, but the older compute makes 8–32K the
+  practical range.
+
+In llama.cpp `-c` is the **total** context shared by `-np` slots. The default
+`CTX_TOTAL=262144` with `-np 96` gives ~2.7K per slot. For one long sequence,
+set `MAX_RUNNING=1 CTX_TOTAL=131072`; for 32 slots × 8K, use
+`CTX_TOTAL=262144`.
+
+```bash
+# one 32K-token request on 4x L40, Q4_K_S
+MAX_RUNNING=1 CTX_TOTAL=131072 \
+./submit.sh --node fuuk-13 --partition gpu-ffa --account ffa \
+  --gres gpu:4 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s \
+  --concurrency 1 --runs 1 --isl 32768 --osl 128 \
+  --min-prompts 1 --max-prompts 1
+```
+
 ## Why this stack
 
 There is **no published multi-user benchmark for the REAP50 checkpoint itself**.
