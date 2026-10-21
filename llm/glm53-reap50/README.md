@@ -84,6 +84,68 @@ fits, with ~13 GB for KV and lower quality (PPL 4.6253).
 | 48 GB | IQ3_M with `--n-cpu-moe` | — | Hybrid, single-user territory |
 | 2×24 GB | IQ2/IQ3 with CPU offload | — | Not recommended for multi-user |
 
+### Non-Blackwell nodes (2 or 4 GPUs) — what to expect
+
+These are **estimates**, not published REAP50 measurements. They assume
+Q4_K_S/IQ4_XS, 2–8K context, llama.cpp layer split, and no prefix-cache
+contamination. The helper exists to replace them with real numbers.
+
+| Node | GPUs / total VRAM | Best checkpoint | Single stream | Aggregate C8–32 | GPU power | Role |
+|---|---|---|---:|---:|---:|---|
+| `uk-g6-05..08` | 2× L40S/L40 48 GB = **96 GB** | **IQ4_XS 82.0 GiB** (safer) or Q4_K_S 87.1 | ~20–50 tok/s | ~60–150 tok/s | ~700 W | **Gentle primary** |
+| `ampere02` | 2× A100 80 GB = **160 GB** | Q4_K_S 87.1 GiB | ~40–90 | ~100–250 | ~800 W | Middle ground |
+| `hopper01` | 2× H100 80 GB = **160 GB** | Q4_K_S 87.1 GiB | ~60–120 | ~150–350 | ~1.4 kW | Fastest 2-GPU, not gentle |
+| `fuuk-13` | 4× L40 48 GB = **192 GB** | Q4_K_S 87.1 GiB | ~30–70 | ~100–250 | ~1.2 kW | Most VRAM; 2× TP2 replicas often beat one 4-way split |
+| `fuuk-13` + FP8 | 4× L40 48 GB = 192 GB | FP8 v2 160.6 GiB | ~10–30 (KTransformers) | ~30–100 | ~1.2 kW | Highest quality; SM89 + CPU-expert caveat |
+| `volta05` | 4× V100 32 GB = **128 GB** | Q4_K_S 87.1 GiB | ~10–25 | ~30–80 | ~1.2 kW | Legacy only |
+
+Why the differences:
+
+- **2× 48 GB** is the gentle rental: 96 GB holds IQ4_XS with ~14 GB left, or
+  Q4_K_S with ~9 GB. That is enough KV for 16–32 slots at 4–8K context because
+  GLM-5.3’s MLA/KDA cache is only ~11 KB/token. The limit is weight bandwidth
+  and llama.cpp’s lack of paged KV, not KV capacity.
+- **2× 80 GB** gives 160 GB, so Q4_K_S fits with ~73 GB KV. H100 has
+  ~3.35 TB/s per card and A100 ~2.0 TB/s, versus L40 ~864 GB/s, which is why
+  they are faster per token. H100/A100 are not “gentle” on power or price.
+- **4× L40** gives 192 GB: Q4_K_S fits with ~105 GB KV, and FP8 v2 (160.6 GiB)
+  technically fits with ~30 GB. FP8 is only practical through KTransformers on
+  SM89; vLLM/SGLang sparse-MLA on L40 is not validated. For throughput, two
+  independent 2× L40S servers usually beat one 4-way layer-split server because
+  there is no 4-way PCIe synchronization.
+- **4× V100** fits Q4_K_S in 128 GB, but there is no BF16/FP8/FP4 and the
+  kernels are older; use it only because it is already there.
+- **2× V100 16 GB (32 GB total)** cannot hold Q4_K_S; only IQ2/offload, so it
+  is not a useful multi-user experiment.
+- **FP8 v2 on 2× 80 GB** does not fit (160.6 GiB weights + no KV), and
+  **NVFP4 on Hopper/Ampere** is not native (Marlin/emulation, slower and not
+  validated for this checkpoint). Use GGUF on these nodes.
+
+Preflight order:
+
+```bash
+# 1) cheapest real datapoint: 2x L40S, IQ4_XS, C1/2/4/8
+./submit.sh --node uk-g6-05 --partition gpu-ffa --account ffa \
+  --gres gpu:2 --cpus 32 --mem 128G --time 04:00:00 \
+  --engine llamacpp --variant iq4_xs --quick
+
+# 2) if that loads and single-stream is usable, moderate sweep
+./submit.sh --node uk-g6-05 --partition gpu-ffa --account ffa \
+  --gres gpu:2 --cpus 32 --mem 128G --time 04:00:00 \
+  --engine llamacpp --variant iq4_xs \
+  --concurrency "1 2 4 8 16 32" --runs 2
+
+# 3) 4x L40 for more KV headroom and a 4-way comparison
+./submit.sh --node fuuk-13 --partition gpu-ffa --account ffa \
+  --gres gpu:4 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s \
+  --concurrency "1 2 4 8 16 32" --runs 2
+```
+
+If `--quick` gives less than ~10 tok/s single-stream, the full sweep is not
+worth the allocation; check the build, the CUDA arch, and whether the model is
+actually fully offloaded (`-ngl 99`) before spending a longer job.
+
 ## Why this stack
 
 There is **no published multi-user benchmark for the REAP50 checkpoint itself**.
