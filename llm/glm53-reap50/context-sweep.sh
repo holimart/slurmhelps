@@ -138,11 +138,15 @@ for spec in $CONTEXTS; do
     batch=512
     ubatch=128
   elif [ "$ctx" -ge 524288 ]; then
-    batch=1024
-    ubatch=256
+    # 512K q8 compute buffers hit cudaMalloc OOM on 2x48 GB; q4_0 plus a
+    # smaller batch leaves enough room.
+    kv_type=q4_0
+    batch=512
+    ubatch=128
   fi
   if ! CTX_TOTAL=$((slot_ctx * conc)) MAX_RUNNING=$conc PORT=$PORT \
       LLAMA_KV_TYPE=$kv_type LLAMA_BATCH=$batch LLAMA_UBATCH=$ubatch \
+      LLAMA_PROMPT_CACHE=0 \
       timeout 1800 "$HELPER/serve.sh" "${serve_args[@]}"; then
     log "server failed for context $ctx"
     printf 'server_failed\n' > "$point/status"

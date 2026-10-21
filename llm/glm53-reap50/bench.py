@@ -469,7 +469,10 @@ def benchmark(cfg: Config, concs: Sequence[int], args: argparse.Namespace) -> di
             if args.cache_regime == "cold" and args.flush_cache:
                 flush_cache(cfg.base_url)
             if warmup:
-                warm_prompts = prompts[: min(warmup, len(prompts))]
+                # Use a short, distinct prompt: warming with the measured
+                # prompt lets llama.cpp's prompt cache turn the measured
+                # request into a cache hit (seen at 64K as a fake 490k tok/s).
+                warm_prompts = ["warmup"] * min(warmup, max(1, len(prompts)))
                 run_batch_mp(run_cfg, warm_prompts, min(conc, max(1, len(warm_prompts))), args.workers)
             if args.cache_regime == "cold" and args.flush_cache:
                 flush_cache(cfg.base_url)

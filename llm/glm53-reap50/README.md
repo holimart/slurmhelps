@@ -168,10 +168,12 @@ GGUF path therefore uses roughly:
 | 4×48 GB | Q4_K_S 87.1 | ~105 GB |
 | 4×32 GB V100 | Q4_K_S 87.1 | ~41 GB |
 
-Memory-wise, **1M tokens of q8_0 KV is only ~5.6 GB**, so it fits on every
-four-GPU configuration and on 2×80 GB. On 2×48 GB it is tight with Q4_K_S but
-fits with IQ4_XS for a single sequence. The real limits are compute and engine
-support:
+Memory-wise, **1M tokens of q8_0 KV is only ~5.6 GB**, but the context also
+needs attention/compute buffers. Measured on 2×48 GB: 256K q8_0 fits, 512K
+q8_0 fails `cudaMalloc` during compute-buffer allocation, and 1M only starts
+with q4_0 KV plus a 512/128 batch. The 82 GiB IQ4_XS weights leave ~10 GB of
+headroom, so weights and buffers, not the KV arithmetic, decide the ceiling.
+The real limits are compute and engine support:
 
 - **llama.cpp GGUF fork**: DSA is gated off, so the 11 sparse-attention layers
   run dense O(n²). **8K** is the prune's assurance, **32K** is usable but slow
@@ -197,6 +199,35 @@ MAX_RUNNING=1 CTX_TOTAL=131072 \
   --concurrency 1 --runs 1 --isl 32768 --osl 128 \
   --min-prompts 1 --max-prompts 1
 ```
+
+### Measured on 2× L40S 48 GB (uk-g6-05, IQ4_XS)
+
+First run, 1 h `gpu-ffa` allocation, 32 CPUs, 256 GiB RAM, `q8_0` KV except
+where noted. These are real numbers from `bench.py`; the tokenizer produced
+~3–5% more tokens than the word budget, and the 64K point below is the failed
+C=2 attempt (C=1 is the right shape for 64K on 96 GB).
+
+| Context | C | Prefill tok/s | Decode tok/s | TTFT | TPOT | Status |
+|---:|---:|---:|---:|---:|---:|---|
+| 4K | 8 | **1,409** | **60.7** | 20.7 s | 70.0 ms | ok |
+| 16K | 4 | **1,614** | **23.8** | 36.9 s | 58.7 ms | ok |
+| 64K | 2 | — | — | — | — | failed: compute-buffer OOM/segfault at 45 GB/card; use C=1 |
+| 256K | 1 | **518** | **22.5** | 476 s (7.9 min) | 44.8 ms | ok |
+| 512K | 1 | — | — | — | — | q8_0 `cudaMalloc` OOM; needs q4_0 + batch 512/128 |
+| 1M | 1 | ~378 (30% in 13 min) | — | — | — | server allocates with q4_0 + batch 512/128; prefill needs ~43 min, did not finish in the 22.6 min point timeout |
+
+What this says:
+
+- **4K/16K are fast**: prefill ~1.4–1.6K tok/s and decode 24–61 tok/s
+  aggregate. Batching helps decode (C=8 gives 60.7 tok/s; C=4 at 16K gives
+  23.8).
+- **256K is prefill-bound**: 7.9 min TTFT at 518 tok/s. Decode is still
+  22.5 tok/s, but end-to-end output is 0.3 tok/s because prefill dominates.
+- **512K/1M are not 1-hour points** with this checkpoint/engine. 512K fails
+  q8 compute-buffer allocation; 1M needs q4 KV and still ~43 min of prefill.
+  The server fitting at 1M does not mean the context is usable interactively.
+- For 64K/512K/1M, run one point per 1-hour job (or use 4×48 GB) and use
+  `--timeout-mult 3`; do not mix them with 4K/16K in the same hour.
 
 ### Long-context batched sweep (1h short queue)
 

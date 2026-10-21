@@ -164,6 +164,7 @@ case "$ENGINE" in
     # NFS mmap page-faults ~10 MB/s here; sequential --no-mmap is much faster
     # and the 82 GiB fits in the job's 256 GiB RAM.
     if [ "${LLAMA_MMAP:-0}" = 0 ]; then cmd+=(--no-mmap); fi
+    if [ "${LLAMA_PROMPT_CACHE:-1}" = 0 ]; then cmd+=(--no-cache-prompt); fi
     cmd+=(
       --metrics
       --override-kv tokenizer.ggml.eot_token_id=int:154827
