@@ -271,6 +271,7 @@ the GGUF fork.
 ## Experiments
 
 - [2026-10-21 — REAP50 context sweep on 2× L40S 48 GB](experiments/2026-10-21-2x48gb-context-sweep.md) — measured 4K/16K/256K prefill and decode, plus the 64K/512K/1M limits. Raw table: [CSV](experiments/data/2026-10-21-2x48gb-context-results.csv) / [JSON](experiments/data/2026-10-21-2x48gb-context-results.json).
+- [2026-10-21 — Faster prefill options](experiments/2026-10-21-faster-prefill-options.md) — why upstream llama.cpp DSA is the only SM89 prefill lever, and the 4×L40 FP8 / 2×H100 alternatives.
 
 ## Why this stack
 

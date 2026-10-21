@@ -99,6 +99,11 @@ points.
 
 ## What to try next for faster prefill
 
+See the dedicated research note:
+[`2026-10-21-faster-prefill-options.md`](2026-10-21-faster-prefill-options.md).
+The short version is below.
+
+
 The measurements above are with llama.cpp’s **dense DSA fallback**. The
 largest expected wins, in order, are:
 
