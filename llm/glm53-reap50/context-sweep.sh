@@ -58,7 +58,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-mkdir -p "$RESULT_DIR"
+# Keep the server pid/log beside this job's results, not in the shared run dir.
+RUN_DIR="$RESULT_DIR/runtime"
+mkdir -p "$RESULT_DIR" "$RUN_DIR"
 log() { printf '[sweep] %s\n' "$*"; }
 stop_server() { "$HELPER/serve.sh" --stop >/dev/null 2>&1 || true; }
 trap stop_server EXIT

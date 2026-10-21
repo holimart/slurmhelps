@@ -25,7 +25,10 @@ SERVE=${SERVE:-1}
 BENCH=${BENCH:-1}
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 RESULT_DIR=${RESULT_DIR:-$RUN_DIR/$STAMP}
-mkdir -p "$RESULT_DIR"
+# Per-job server.pid/server.log: two jobs on two nodes must not share the
+# same files under the common runs directory.
+export RUN_DIR="$RESULT_DIR/runtime"
+mkdir -p "$RESULT_DIR" "$RUN_DIR"
 
 log() { printf '[job] %s\n' "$*"; }
 cleanup() {
