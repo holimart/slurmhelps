@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-21T20:30:48Z",
+  "engine": "llamacpp",
+  "base_url": "http://127.0.0.1:30000",
+  "model": "glm53-reap50",
+  "suffix_tokens": 128,
+  "osl": 128,
+  "prefixes": [
+    100000,
+    200000,
+    300000,
+    400000,
+    500000,
+    600000,
+    700000,
+    800000,
+    900000,
+    950000
+  ],
+  "caveats": {
+    "miss": "not measured; inferred as cumulative fill-to-P + suffix TTFT",
+    "gpu_reuse": "one sequence only (active llama.cpp slot); not a multi-branch GPU tree",
+    "gpu_prefix_tree": "unmeasured: llama.cpp has no GPU-resident multi-prefix tree",
+    "ram_kv_tier": "unmeasured: llama.cpp prompt cache is host state restore, not a paged KV tier",
+    "multi_agent_gpu_capacity": "unmeasured",
+    "cache_tier_attribution": "unmeasured: no per-tier KV metrics in llama.cpp"
+  },
+  "capacity": {
+    "kv_cells": 1048576,
+    "kv_mib": 3168.0,
+    "host_prompt_cache_mib": 8192.0,
+    "active_gpu_max_prefix_tokens": 1048576,
+    "host_cache_branches_at_max_prefix": 1.47,
+    "note": "host cache is serialized prompt state, not a paged GPU tree"
+  },
+  "rows": [
+    {
+      "prefix_tokens": 100000,
+      "suffix_tokens": 128,
+      "fill_ttft_s": 171.1738,
+      "expected_new_tokens": 100000,
+      "incremental_prefill_tok_s": 584.2,
+      "cumulative_fill_s": 171.1738,
+      "hit_ttft_s": 0.5435,
+      "hit_reuse_ratio": 314.96,
+      "hit_suffix_prefill_tok_s": 235.52,
+      "hit_decode_tok_s": 30.2,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.179,
+      "repeat_reuse_ratio": 3.04,
+      "inferred_miss_ttft_s": 171.7173,
+      "cache_reuse_verified": true,
+      "gpu_reuse_measurement": "single active sequence only"
+    },
+    {
+      "prefix_tokens": 200000,
+      "suffix_tokens": 128,
+      "fill_ttft_s": 310.2105,
+      "expected_new_tokens": 100000,
+      "incremental_prefill_tok_s": 322.36,
+      "cumulative_fill_s": 481.3843,
+      "hit_ttft_s": 0.8044,
+      "hit_reuse_ratio": 385.65,
+      "hit_suffix_prefill_tok_s": 159.13,
+      "hit_decode_tok_s": 24.55,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.2946,
+      "repeat_reuse_ratio": 2.73,
+      "inferred_miss_ttft_s": 482.1887,
+      "cache_reuse_verified": true,
+      "gpu_reuse_measurement": "single active sequence only"
+    },
+    {
+      "prefix_tokens": 300000,
+      "suffix_tokens": 128,
+      "fill_ttft_s": 424.9347,
+      "expected_new_tokens": 100000,
+      "incremental_prefill_tok_s": 235.33,
+      "cumulative_fill_s": 906.319,
+      "hit_ttft_s": 1.0937,
+      "hit_reuse_ratio": 388.52,
+      "hit_suffix_prefill_tok_s": 117.03,
+      "hit_decode_tok_s": 20.68,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.4236,
+      "repeat_reuse_ratio": 2.58,
+      "inferred_miss_ttft_s": 907.4127,
+      "cache_reuse_verified": true,
+      "gpu_reuse_measurement": "single active sequence only"
+    }
+  ]
+}
