@@ -763,6 +763,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=(0.0, 0),
     )
     print(f"peak median output: {best[0]:.1f} tok/s at C={best[1]}")
+    completed = sum(run["completed"] for p in result["points"] for run in p["runs"])
+    if completed == 0:
+        print("no requests completed", file=sys.stderr)
+        return 1
     return 0
 
 

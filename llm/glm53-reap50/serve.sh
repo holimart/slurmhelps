@@ -160,7 +160,11 @@ case "$ENGINE" in
       -np "$MAX_RUNNING" -c "$CTX_TOTAL"
       -b "$LLAMA_BATCH" -ub "$LLAMA_UBATCH"
       -fa on -ctk "$LLAMA_KV_TYPE" -ctv "$LLAMA_KV_TYPE"
-      --cache-prompt --cache-reuse "$LLAMA_CACHE_REUSE"
+      --cache-prompt --cache-reuse "$LLAMA_CACHE_REUSE")
+    # NFS mmap page-faults ~10 MB/s here; sequential --no-mmap is much faster
+    # and the 82 GiB fits in the job's 256 GiB RAM.
+    if [ "${LLAMA_MMAP:-0}" = 0 ]; then cmd+=(--no-mmap); fi
+    cmd+=(
       --metrics
       --override-kv tokenizer.ggml.eot_token_id=int:154827
       --override-kv tokenizer.ggml.eom_token_id=int:154829)

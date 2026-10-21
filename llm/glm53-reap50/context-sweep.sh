@@ -5,7 +5,7 @@
 #
 # Point syntax: CTX:CONCURRENCY, separated by '+' (Slurm --export cannot carry
 # spaces or commas). Default:
-#   4096:8 16384:4 65536:2 262144:1 1048576:1
+#   4096:8 16384:4 65536:2 262144:1 524288:1 1048576:1
 #
 # The 1M point is attempted last and with a hard timeout: on llama.cpp's dense
 # DSA fallback it is expected to be compute-bound and may not finish. Earlier
@@ -31,10 +31,11 @@ export WORK_ROOT
 source "$HELPER/config.env"
 
 DRY_RUN=0
-CONTEXTS=${CONTEXTS:-4096:8+16384:4+65536:2+262144:1+1048576:1}
+CONTEXTS=${CONTEXTS:-4096:8+16384:4+65536:2+262144:1+524288:1+1048576:1}
 CONTEXTS=${CONTEXTS//+/ }
 SWEEP_OSL=${SWEEP_OSL:-128}
 SWEEP_BUDGET_MIN=${SWEEP_BUDGET_MIN:-55}
+SWEEP_TIMEOUT_MULT=${SWEEP_TIMEOUT_MULT:-1}
 RESULT_DIR=${RESULT_DIR:-$RUN_DIR/context-sweep-$(date -u +%Y%m%dT%H%M%SZ)}
 MODEL=${MODEL:-}
 SERVED_MODEL_NAME=${SERVED_MODEL_NAME:-glm53-reap50}
@@ -49,6 +50,7 @@ while [ $# -gt 0 ]; do
     --contexts)    CONTEXTS=$2; CONTEXTS=${CONTEXTS//+/ }; shift 2 ;;
     --osl)         SWEEP_OSL=$2; shift 2 ;;
     --budget-min)  SWEEP_BUDGET_MIN=$2; shift 2 ;;
+    --timeout-mult) SWEEP_TIMEOUT_MULT=$2; shift 2 ;;
     --result-dir)  RESULT_DIR=$2; shift 2 ;;
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage; exit 0 ;;
@@ -70,12 +72,14 @@ log "result dir: $RESULT_DIR"
 base_timeout_for() {
   local ctx=$1
   if [ "$ctx" -ge 1048576 ]; then echo 1500
+  elif [ "$ctx" -ge 524288 ]; then echo 1200
   elif [ "$ctx" -ge 262144 ]; then echo 900
   elif [ "$ctx" -ge 65536 ]; then echo 600
   else echo 420
   fi
 }
 
+first=1
 for spec in $CONTEXTS; do
   ctx=${spec%%:*}
   conc=${spec##*:}
@@ -89,7 +93,7 @@ for spec in $CONTEXTS; do
     log "budget exhausted before context $ctx (${remaining}s left)"
     break
   fi
-  timeout_s=$(base_timeout_for "$ctx")
+  timeout_s=$(( $(base_timeout_for "$ctx") * SWEEP_TIMEOUT_MULT ))
   if [ "$timeout_s" -gt $((remaining - 30)) ]; then timeout_s=$((remaining - 30)); fi
   if [ "$timeout_s" -lt 60 ]; then
     log "not enough time for context $ctx (${remaining}s left)"
@@ -100,11 +104,12 @@ for spec in $CONTEXTS; do
   # own maximum is the cap, so trim the prompt instead of growing the slot.
   if [ "$ctx" -ge 1048576 ]; then
     slot_ctx=$ctx
-    prompt_ctx=$((ctx - 4096))
   else
     slot_ctx=$((ctx + SWEEP_OSL + 64))
-    prompt_ctx=$ctx
   fi
+  # Bench prompts are word-based and tokenize ~5% longer; leave 10% slack so
+  # the request fits in its slot. The actual token count is in results.json.
+  prompt_ctx=$((ctx * 90 / 100))
 
   point="$RESULT_DIR/ctx-${ctx}-c${conc}"
   mkdir -p "$point"
@@ -123,14 +128,31 @@ for spec in $CONTEXTS; do
   stop_server
   serve_args=(--engine "$ENGINE" --variant "$VARIANT" --background --wait)
   if [ -n "$MODEL" ]; then serve_args+=(--model "$MODEL"); fi
+  kv_type=$LLAMA_KV_TYPE
+  batch=$LLAMA_BATCH
+  ubatch=$LLAMA_UBATCH
+  if [ "$ctx" -ge 1048576 ]; then
+    kv_type=q4_0
+    batch=512
+    ubatch=128
+  elif [ "$ctx" -ge 524288 ]; then
+    batch=1024
+    ubatch=256
+  fi
   if ! CTX_TOTAL=$((slot_ctx * conc)) MAX_RUNNING=$conc PORT=$PORT \
-      timeout 900 "$HELPER/serve.sh" "${serve_args[@]}"; then
+      LLAMA_KV_TYPE=$kv_type LLAMA_BATCH=$batch LLAMA_UBATCH=$ubatch \
+      timeout 1800 "$HELPER/serve.sh" "${serve_args[@]}"; then
     log "server failed for context $ctx"
     printf 'server_failed\n' > "$point/status"
     cp -f "$RUN_DIR/server.log" "$point/server.log" 2>/dev/null || true
     stop_server
+    if [ "$first" = 1 ]; then
+      log "first point failed to start; aborting the sweep"
+      break
+    fi
     continue
   fi
+  first=0
   cp -f "$RUN_DIR/server.log" "$point/server.log" 2>/dev/null || true
 
   # A 256K/1M warmup would double an already huge prefill; skip it there.

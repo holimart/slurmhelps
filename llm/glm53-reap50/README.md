@@ -206,7 +206,7 @@ shares one `-c` across all `-np` slots, so the slot count has to change with the
 context. Default points:
 
 ```text
-4096:8  16384:4  65536:2  262144:1  1048576:1
+4096:8  16384:4  65536:2  262144:1  524288:1  1048576:1
   C=8      C=4       C=2       C=1        C=1
 ```
 
@@ -223,7 +223,7 @@ For the gentle 96 GB experiment on the **1-hour short queue**, use two of
   --gpus 2 --cpus 32 --mem 256G --time 01:00:00 \
   --engine llamacpp --variant iq4_xs --no-install \
   --context-sweep \
-  --contexts "4096:8 16384:4 65536:2 262144:1 1048576:1" \
+  --contexts "4096:8 16384:4 65536:2 262144:1 524288:1 1048576:1" \
   --sweep-osl 128 --budget-min 55
 ```
 

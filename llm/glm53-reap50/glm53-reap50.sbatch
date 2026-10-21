@@ -15,6 +15,8 @@
 #SBATCH --output=glm53-reap50-%j.out
 set -euo pipefail
 
-SELF=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-ROOT=${SLURMHELPS_ROOT:-$(cd "$SELF/../.." && pwd)}
-exec bash "$ROOT/llm/glm53-reap50/run-job.sh"
+# Slurm copies this file to /var/spool/slurm/...; its own directory is not the
+# checkout. submit.sh passes the absolute helper path.
+ROOT=${SLURMHELPS_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}
+HELPER=${GLM53_HELPER:-$ROOT/llm/glm53-reap50}
+exec bash "$HELPER/run-job.sh"
