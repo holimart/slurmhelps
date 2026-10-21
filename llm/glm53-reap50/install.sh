@@ -225,7 +225,11 @@ install_llamacpp() {
     CUDA_HOME=/usr/local/cuda-12.5
   fi
   export CUDA_HOME
-  local cmake_args=(-DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CUDA_ARCHITECTURES=$arch")
+  export PATH="$CUDA_HOME/bin:$PATH"
+  export CUDACXX="${CUDACXX:-$CUDA_HOME/bin/nvcc}"
+  [ -x "$CUDACXX" ] || die "CUDA compiler not found at $CUDACXX (set --cuda-home)"
+  local cmake_args=(-DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_CUDA_ARCHITECTURES=$arch" "-DCMAKE_CUDA_COMPILER=$CUDACXX")
   log "building llama.cpp (CUDA_HOME=$CUDA_HOME arch=$arch)"
   run cmake -S "$LLAMACPP_SRC" -B "$LLAMACPP_BUILD" "${cmake_args[@]}"
   run cmake --build "$LLAMACPP_BUILD" -j "$BUILD_JOBS" --target llama-server

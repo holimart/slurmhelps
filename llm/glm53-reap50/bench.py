@@ -381,6 +381,12 @@ def summarize(samples: Sequence[Sample], wall_s: float, cfg: Config) -> dict[str
         if s.ttft_s * 1000.0 <= cfg.slo_ttft_ms and s.tpot_s * 1000.0 <= cfg.slo_tpot_ms
     )
     wall = max(wall_s, 1e-9)
+    # For a single request these are exact prefill/decode rates. For a batch
+    # they are the aggregate prompt/output rates over the longest prefill or
+    # decode window, which is the useful capacity number for a long-context
+    # point (end-to-end output tok/s is dominated by prefill).
+    prefill_s = max((s.ttft_s for s in ok), default=0.0)
+    decode_s = max((s.e2e_s - s.ttft_s for s in ok), default=0.0)
     return {
         "completed": len(ok),
         "failed": failed,
@@ -389,6 +395,8 @@ def summarize(samples: Sequence[Sample], wall_s: float, cfg: Config) -> dict[str
         "input_tokens": in_tokens,
         "output_tokens_per_s": round(out_tokens / wall, 3),
         "total_tokens_per_s": round((out_tokens + in_tokens) / wall, 3),
+        "prefill_tokens_per_s": round(in_tokens / prefill_s, 3) if prefill_s else 0.0,
+        "decode_tokens_per_s": round(out_tokens / decode_s, 3) if decode_s else 0.0,
         "request_throughput": round(len(ok) / wall, 3),
         "ttft_ms": {
             "mean": round(statistics.fmean(ttfts), 3) if ttfts else 0.0,
@@ -415,7 +423,8 @@ def summarize(samples: Sequence[Sample], wall_s: float, cfg: Config) -> dict[str
 def median_summary(runs: Sequence[dict[str, Any]]) -> dict[str, Any]:
     if not runs:
         return {}
-    keys = ("output_tokens_per_s", "total_tokens_per_s", "request_throughput",
+    keys = ("output_tokens_per_s", "total_tokens_per_s", "prefill_tokens_per_s",
+            "decode_tokens_per_s", "request_throughput",
             "goodput_req_per_s", "slo_attainment")
     out: dict[str, Any] = {k: round(statistics.median([r[k] for r in runs]), 3) for k in keys}
     for metric in ("ttft_ms", "tpot_ms", "e2e_ms"):
@@ -442,7 +451,12 @@ def benchmark(cfg: Config, concs: Sequence[int], args: argparse.Namespace) -> di
     for conc in concs:
         n_prompts = max(args.min_prompts, conc * args.prompt_factor)
         n_prompts = min(n_prompts, args.max_prompts)
-        warmup = args.warmup if args.warmup > 0 else min(args.warmup_max, max(2 * conc, 32))
+        if args.warmup < 0:
+            warmup = 0  # explicitly disabled (important at 256K/1M)
+        elif args.warmup > 0:
+            warmup = args.warmup
+        else:
+            warmup = min(args.warmup_max, max(2 * conc, 32))
         point_runs: list[dict[str, Any]] = []
         for run_idx in range(1, args.runs + 1):
             rng = random.Random(cfg.seed + conc * 1000 + run_idx)
@@ -521,7 +535,8 @@ def write_outputs(result: dict[str, Any], outdir: Path) -> tuple[Path, Path]:
     json_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     fields = [
         "concurrency", "run", "num_prompts", "completed", "failed", "duration_s",
-        "output_tokens_per_s", "total_tokens_per_s", "request_throughput",
+        "output_tokens_per_s", "total_tokens_per_s", "prefill_tokens_per_s",
+        "decode_tokens_per_s", "request_throughput",
         "ttft_p50_ms", "ttft_p99_ms", "tpot_p50_ms", "tpot_p99_ms",
         "goodput_req_per_s", "slo_attainment", "cache_hit_rate", "cache_regime",
     ]
@@ -539,6 +554,8 @@ def write_outputs(result: dict[str, Any], outdir: Path) -> tuple[Path, Path]:
                     "duration_s": run["duration_s"],
                     "output_tokens_per_s": run["output_tokens_per_s"],
                     "total_tokens_per_s": run["total_tokens_per_s"],
+                    "prefill_tokens_per_s": run["prefill_tokens_per_s"],
+                    "decode_tokens_per_s": run["decode_tokens_per_s"],
                     "request_throughput": run["request_throughput"],
                     "ttft_p50_ms": run["ttft_ms"]["p50"],
                     "ttft_p99_ms": run["ttft_ms"]["p99"],
@@ -674,7 +691,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt-factor", type=int, default=5)
     p.add_argument("--min-prompts", type=int, default=200)
     p.add_argument("--max-prompts", type=int, default=4000)
-    p.add_argument("--warmup", type=int, default=0, help="0 = auto max(2*C, 32) capped by --warmup-max")
+    p.add_argument("--warmup", type=int, default=0,
+                   help="0 = auto max(2*C, 32) capped by --warmup-max; -1 = no warmup")
     p.add_argument("--warmup-max", type=int, default=256)
     p.add_argument("--shared-prefix", type=int, default=0,
                    help="tokens shared by every prompt (prefix-cache measurement)")
@@ -726,7 +744,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.dry_run:
         for conc in concs:
             n = min(args.max_prompts, max(args.min_prompts, conc * args.prompt_factor))
-            warm = args.warmup if args.warmup > 0 else min(args.warmup_max, max(2 * conc, 32))
+            if args.warmup < 0:
+                warm = 0
+            elif args.warmup > 0:
+                warm = args.warmup
+            else:
+                warm = min(args.warmup_max, max(2 * conc, 32))
             print(f"C={conc:<4} prompts={n:<5} warmup={warm:<4} runs={args.runs}")
         print(f"endpoint={cfg.base_url}{cfg.endpoint} metrics={cfg.metrics_url or '-'} workers={args.workers}")
         return 0

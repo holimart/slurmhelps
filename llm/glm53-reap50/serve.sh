@@ -150,6 +150,11 @@ case "$ENGINE" in
   llamacpp)
     if [ ! -f "$LLAMA_SERVER" ] && [ "$DRY_RUN" = 0 ]; then die "llama-server missing: $LLAMA_SERVER (run install.sh)"; fi
     case "$MODEL" in *.gguf) ;; *) die "llamacpp needs a .gguf model, got $MODEL" ;; esac
+    # The binary may be linked against a toolkit different from /usr/local/cuda
+    # (V100 needs 12.5 for sm_70; L40 was built with 12.5 for CCCL reasons).
+    if [ -n "${LLAMA_CUDA_HOME:-}" ] && [ -d "$LLAMA_CUDA_HOME/lib64" ]; then
+      export LD_LIBRARY_PATH="$LLAMA_CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+    fi
     cmd=("$LLAMA_SERVER" -m "$MODEL" --host "$HOST" --port "$PORT"
       -ngl 99 --split-mode layer
       -np "$MAX_RUNNING" -c "$CTX_TOTAL"

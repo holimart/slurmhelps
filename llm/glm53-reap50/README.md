@@ -198,6 +198,45 @@ MAX_RUNNING=1 CTX_TOTAL=131072 \
   --min-prompts 1 --max-prompts 1
 ```
 
+### Long-context batched sweep (1h short queue)
+
+`context-sweep.sh` measures **prefill tok/s and decode tok/s separately** at
+several context sizes. It restarts the server for each point because llama.cpp
+shares one `-c` across all `-np` slots, so the slot count has to change with the
+context. Default points:
+
+```text
+4096:8  16384:4  65536:2  262144:1  1048576:1
+  C=8      C=4       C=2       C=1        C=1
+```
+
+It runs one request per slot, uses `--warmup 1` for short points and no warmup
+for 256K/1M, keeps earlier results if a later point times out, and writes
+`context-results.json` / `.csv` with `status`, `ttft_s`,
+`prefill_tokens_per_s`, `decode_tokens_per_s`, and end-to-end tok/s.
+
+For the gentle 96 GB experiment on the **1-hour short queue**, use two of
+`ampere01`'s three L40s:
+
+```bash
+./submit.sh --node ampere01 --partition gpu-short --account ffa \
+  --gpus 2 --cpus 32 --mem 256G --time 01:00:00 \
+  --engine llamacpp --variant iq4_xs --no-install \
+  --context-sweep \
+  --contexts "4096:8 16384:4 65536:2 262144:1 1048576:1" \
+  --sweep-osl 128 --budget-min 55
+```
+
+`--no-install` assumes `install.sh --engine llamacpp --variant iq4_xs
+--cuda-arch 89` has already populated the GGUF and built `llama-server`.
+Without that, the first part of the hour is spent downloading/building.
+
+Expect 4K/16K/64K to finish, 256K to be slow, and **1M to time out** on
+llama.cpp's dense DSA fallback; a timed-out 1M point still tells you whether the
+server could allocate the 1M KV (health succeeded) or not (server_failed). For
+usable 128K+ context you need the FP8 v2 checkpoint plus a DSA-aware engine, not
+the GGUF fork.
+
 ## Why this stack
 
 There is **no published multi-user benchmark for the REAP50 checkpoint itself**.
@@ -409,6 +448,7 @@ GPUs and leaving more room for KV/concurrency, not from a 2× faster token.
 | `serve.sh` | SGLang / vLLM / llama.cpp launch, health wait, pid/log, `--stop` |
 | `bench.py` | stdlib-only batched benchmark client (`--self-test` for CI) |
 | `bench.sh` | config defaults around `bench.py` |
+| `context-sweep.sh` | long-context sweep: restart server per context, prefill/decode tok/s, per-point timeout |
 | `run-job.sh` | install → serve → wait → bench → stop, writes `job.json` |
 | `glm53-reap50.sbatch` | thin Slurm entry point |
 | `submit.sh` | fills partition/account/resources and submits |

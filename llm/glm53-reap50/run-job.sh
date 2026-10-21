@@ -60,6 +60,12 @@ if [ "$INSTALL" = 1 ]; then
   "$HELPER/install.sh" --engine "$ENGINE" --variant "$VARIANT"
 fi
 
+if [ "${CONTEXT_SWEEP:-0}" = 1 ]; then
+  log "long-context sweep"
+  exec "$HELPER/context-sweep.sh" --engine "$ENGINE" --variant "$VARIANT" \
+    --result-dir "$RESULT_DIR"
+fi
+
 if [ "$SERVE" = 1 ]; then
   log "serve"
   "$HELPER/serve.sh" --engine "$ENGINE" --variant "$VARIANT" --background --wait
