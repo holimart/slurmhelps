@@ -9,6 +9,7 @@ several agent sessions. Keep it generic and keep everyone's entry points working
 |------|---------|------|
 | `bin/`, `lib/named_mounts.sh` | the operator's **workstation** (ssh, sshfs, rsync to the cluster) | must refuse on a cluster node where it makes no sense (`SLURM_JOB_ID`, `sbatch` on PATH, `site.cluster_host_glob`) |
 | `fleet/`, `image/`, `maint/`, `env/` | the **cluster**: login node for light commands, Slurm jobs for anything heavy | never heavy work on a login node: builds, tests, image builds, tree walks go through `srun`/`sbatch` |
+| `llm/` | a GPU Slurm job (install, serve, benchmark) | model-serving helpers; no site paths in code; downloads/builds/serving run in an allocation |
 | `bootstrap/` | a Slurm job on the cluster after a total loss | idempotent; writes only below `--prefix`; never copies secrets |
 | `lib/slurmhelps/` | both | stdlib only, Python 3.9+ (the cluster's system python) |
 | `docs/`, `examples/` | — | every config key is documented in `docs/config.md` |

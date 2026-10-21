@@ -1,0 +1,313 @@
+# GLM-5.3-Flash REAP50 — deployment and batched-throughput benchmark
+
+This directory installs, serves and benchmarks the **50%-expert-pruned
+GLM-5.3-Flash** family (`321B → ~165B`, 144 of 288 routed experts) on a Slurm
+cluster. It is deliberately independent of any one project: partition, account,
+work root and paths come from the calling project's `slurmhelps.json` (or from
+flags/environment).
+
+It supports **two target experiments**, plus a quality-first option and the V100
+fallback:
+
+| Experiment | Hardware | Stack | Question it answers |
+|---|---|---|---|
+| **A. Max throughput (target)** | 2× 96 GB Blackwell, 192 GB total | SGLang v0.5.20+ + **NVFP4 v2** | How many aggregate tok/s can batching + prefix caching reach? |
+| **B. Gentle / rented (less VRAM)** | 2× 48 GB L40S, 96 GB total; or 1× 96 GB Blackwell | llama.cpp + **Q4_K_S** (87.1 GiB) or **IQ4_XS** (82.0 GiB) | What is still usable on a smaller, lower-power rental? |
+| Quality-first | 4× H100/H200 or 192 GB Blackwell | SGLang/vLLM + **FP8 v2** (160.6 GiB) | Highest published quality, accepting much less KV headroom |
+| V100 / GGUF fallback | 4× V100 32 GB, 128 GB total | llama.cpp + Q4_K_S/IQ4_XS | Runs at all on older cards, no BF16/FP8/FP4 |
+
+Read the caveats at the bottom before trusting a number.
+
+## The two experiments
+
+Both use the same `install.sh` / `serve.sh` / `bench.sh`; only the flags and the
+node change. Run `--quick` first on either one to validate the install before
+the full concurrency sweep.
+
+### Experiment A — max throughput (target)
+
+| | |
+|---|---|
+| Node | `bw01`, 2× RTX PRO 6000 Blackwell **96 GB each = 192 GB**, 48 CPUs, 760 GB RAM |
+| Slurm | `gpu-long`, `--gres gpu:2 --cpus 32 --mem 256G --time 12:00:00` |
+| Model | **REAP50 NVFP4 v2**, 98.2 GiB, 0.8386 top-1 |
+| Engine | SGLang, TP2, FP8 KV, RadixAttention, chunked prefill, CUDA graphs |
+| Server shape | `--mem-fraction-static 0.80 --max-running-requests 96 --max-prefill-tokens 16384 --chunked-prefill-size 8192 --cuda-graph-max-bs-decode 128 --schedule-policy lpm` |
+| Measures | Aggregate output tok/s vs concurrency (1–128), TTFT/TPOT, goodput, prefix-cache hit rate |
+| Estimate | **~700–1,200 tok/s aggregate at C16–32**, ~150–200 single-stream (no published REAP50 run; must measure) |
+| Why this node | NVFP4 fits with ~90 GB left for KV/activations, so concurrency is not VRAM-starved; Blackwell runs the NVFP4 path natively |
+
+```bash
+./submit.sh \
+  --node bw01 --partition gpu-long --account ffa \
+  --gres gpu:2 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine sglang --variant nvfp4
+```
+
+### Experiment B — gentle / rented, less GPU memory
+
+| | |
+|---|---|
+| Node | **2× 48 GB L40S = 96 GB total** (rental-friendly) **or 1× 96 GB Blackwell** |
+| Slurm / rental | 2×48: `--gres gpu:2 --cpus 32 --mem 256G --time 12:00:00`; 1×96: `--gres gpu:1` |
+| Model | **Q4_K_S** 87.1 GiB (PPL 4.5833) or **IQ4_XS** 82.0 GiB (PPL 4.6002, more KV room) |
+| Engine | llama.cpp patched fork, layer split across the cards, `-np 16–32`, q8_0 KV, prompt cache |
+| Measures | Single-stream and moderate-concurrency throughput; quality/VRAM/power trade |
+| Estimate | **~30–120 tok/s aggregate at C8–16**, ~10–30 single-stream on 2×48 GB; a single 96 GB card avoids PCIe layer-split overhead and should be faster |
+| Why this node | 87–82 GiB fits in 96 GB; ~700 W for 2× L40S vs ~1,200 W for 2× 96 GB Blackwell. Llama.cpp has no paged KV/RadixAttention, so this is a “gentle” experiment, not a max-concurrency one |
+
+```bash
+# 2x 48 GB L40S (replace <node>/<partition>/<account> with the rental's Slurm values)
+./submit.sh \
+  --node <l40s-node> --partition <partition> --account <account> \
+  --gres gpu:2 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s
+
+# 1x 96 GB Blackwell: same model, no tensor-parallel overhead
+./submit.sh \
+  --node <blackwell-node> --partition <partition> --account <account> \
+  --gres gpu:1 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s
+```
+
+If the 2×48 GB node is tight on KV, switch to `--variant iq4_xs` (82.0 GiB:
+~14 GB left instead of ~9 GB). On a single 80 GB card only `iq3_m` (67.2 GiB)
+fits, with ~13 GB for KV and lower quality (PPL 4.6253).
+
+**Fit by total VRAM:**
+
+| Total VRAM | Best variant | KV headroom | Verdict |
+|---:|---|---:|---|
+| 192 GB | NVFP4 v2 98.2 GiB | ~90 GB | Experiment A; best concurrency |
+| 96 GB | Q4_K_S 87.1 GiB / IQ4_XS 82.0 GiB | ~9 / ~14 GB | Experiment B; moderate concurrency |
+| 80 GB | IQ3_M 67.2 GiB | ~13 GB | Fits, lower quality |
+| 48 GB | IQ3_M with `--n-cpu-moe` | — | Hybrid, single-user territory |
+| 2×24 GB | IQ2/IQ3 with CPU offload | — | Not recommended for multi-user |
+
+## Why this stack
+
+There is **no published multi-user benchmark for the REAP50 checkpoint itself**.
+The choice is based on full-model GLM-5.3-Flash evidence and on what fits:
+
+| Evidence | Result |
+|---|---|
+| 4× B200, SGLang, full NVFP4, TP4/EP4 | 2,420 tok/s at C24; **6,030 tok/s at C96** |
+| 2× GB300, SGLang, full NVFP4, TP2 | 1,734 tok/s at C32; **2,100 tok/s at C64** |
+| 4× RTX PRO 6000, SGLang, full NVFP4 | 2,277 tok/s at C17–32 |
+| 8× H100, vLLM, full FP8, FA3 | 754 tok/s at C8 (default FlashInfer: 230 tok/s) |
+
+SGLang has the strongest published GLM-5.3-Flash numbers and the mature
+RadixAttention/prefix-cache path; vLLM is second and has a known SM120 sparse-MLA
+blocker for this model. REAP50 halves the weights but still activates 8 experts
+per token, so the gain is concurrency/VRAM, not a faster token.
+
+## Checkpoints
+
+All are MIT, from `patrickbdevaney` (the v2 mask; v3/HOPE is not evaluated end
+to end and is excluded by `install.sh`).
+
+| `--variant` | Repo / file | Size | Format | Quality |
+|---|---|---|---|---|
+| `nvfp4` | `GLM-5.3-Flash-REAP50-NVFP4-v2` (root) | 98.2 GiB | compressed-tensors NVFP4, W4A16 | 0.8386 top-1 agreement |
+| `fp8` | `GLM-5.3-Flash-REAP50-FP8-v2` (root) | 160.6 GiB | FP8 e4m3, 128×128 | **0.8425 top-1** |
+| `q4_k_s` | `GLM-5.3-Flash-REAP50-Q4_K_S.gguf` | 87.1 GiB | GGUF | PPL 4.5833 |
+| `q4_k_m` | `GLM-5.3-Flash-REAP50-Q4_K_M.gguf` | 92.5 GiB | GGUF | PPL 4.5959 |
+| `iq4_xs` | `GLM-5.3-Flash-REAP50-IQ4_XS.gguf` | 82.0 GiB | GGUF | PPL 4.6002 |
+| `iq3_m` | `GLM-5.3-Flash-REAP50-IQ3_M.gguf` | 67.2 GiB | GGUF | PPL 4.6253 |
+
+The GGUF PPL differences are within the noise of the published 8×512-token
+sample. The FP8 parent PPL is ~4.449, so the 4-bit GGUFs are roughly +3% PPL on
+top of the prune. There is **no published generative/top-1 benchmark for any
+GGUF** — treat that as the quality unknown.
+
+## Quick start
+
+On the cluster, from this directory:
+
+```bash
+# 1) see what is available
+./install.sh --list
+
+# 2) Experiment A: 2x 96 GB Blackwell, SGLang, NVFP4
+./submit.sh \
+  --node bw01 --partition gpu-long --account ffa \
+  --gres gpu:2 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine sglang --variant nvfp4
+
+# 3) Experiment B: 2x 48 GB L40S, llama.cpp, Q4_K_S (or IQ4_XS)
+./submit.sh \
+  --node <l40s-node> --partition <partition> --account <account> \
+  --gres gpu:2 --cpus 32 --mem 256G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s
+
+# 4) 4x V100 32 GB, GGUF Q4_K_S, llama.cpp
+./submit.sh \
+  --node volta05 --partition gpu-ffa-gpulab --account ffa \
+  --gres gpu:v100:4 --cpus 16 --mem 128G --time 12:00:00 \
+  --engine llamacpp --variant q4_k_s
+```
+
+`submit.sh` prints the result directory and the `squeue`/`tail` commands. The
+job installs (unless `--no-install`), starts the server, waits for `/health`,
+runs the sweep, stops the server and writes `results.json` / `results.csv`.
+
+Run pieces by hand inside an allocation:
+
+```bash
+./install.sh --engine sglang --variant nvfp4
+./serve.sh   --engine sglang --variant nvfp4 --background --wait
+./bench.sh   --base-url http://127.0.0.1:30000 --concurrency "1 2 4 8 16 32 64"
+./serve.sh   --stop
+```
+
+## What gets installed
+
+| Engine | Install | Why |
+|---|---|---|
+| `sglang` | Apptainer image `lmsysorg/sglang:glm-5.3-flash`, or `uv` venv with `sglang[all]>=0.5.20` | Highest published GLM-5.3-Flash multi-user throughput; RadixAttention prefix cache, chunked prefill, CUDA graphs, NVFP4 loading |
+| `vllm` | `vllm/vllm-openai:glm53-flash`, or `uv` venv with `vllm>=0.30` | Alternative; **SM120 (RTX PRO 6000) currently needs a patched image** for the NoPE sparse-MLA `pe_dim==64` assert |
+| `llamacpp` | patched fork `patrickbdevaney/llama.cpp`, tag `glm5-next-reap50-gguf-v1`, built with CUDA | The published GGUFs were built/validated against this fork; upstream b11273+ can load them with KV-key overrides but is not the zero-friction path |
+
+Everything is idempotent. `--skip-model`, `--skip-runtime`, `--force`,
+`--method container|venv`, `--cuda-arch 70|89|120` are available.
+
+## Recommended server shape
+
+SGLang on 2× 96 GB Blackwell (`bw01`-class), NVFP4:
+
+```bash
+python3 -m sglang.launch_server \
+  --model-path .../nvfp4 --tp 2 \
+  --served-model-name glm53-reap50 \
+  --mem-fraction-static 0.80 \
+  --max-running-requests 96 \
+  --chunked-prefill-size 8192 --max-prefill-tokens 16384 \
+  --cuda-graph-max-bs-decode 128 \
+  --schedule-policy lpm \
+  --kv-cache-dtype fp8_e4m3 \
+  --enable-metrics --enable-cache-report
+```
+
+- `--schedule-policy lpm` only pays when requests share prefixes (agent system
+  prompt / RAG); use `fcfs` otherwise.
+- `--mem-fraction-static` 0.80 leaves room for the 98 GiB weights on 192 GB;
+  raise in 0.01 steps until startup leaves ~5–8 GB free.
+- NVFP4 is **W4A16**: weights are 4-bit, activations 16-bit. It saves weight
+  bandwidth and VRAM, but it does **not** use FP4 tensor cores for compute. A
+  W4A4 re-quant is the one experiment that could raise the compute ceiling.
+- MTP is present in the v2 checkpoints. Speculative decoding may help at high
+  batch; test it, do not assume it (llama.cpp MTP was measured slower at small
+  batch).
+
+llama.cpp on 4× V100 32 GB, Q4_K_S (87.1 GiB):
+
+```bash
+llama-server -m .../GLM-5.3-Flash-REAP50-Q4_K_S.gguf \
+  -ngl 99 --split-mode layer \
+  -np 96 -c 262144 \
+  -b 4096 -ub 1024 -fa on -ctk q8_0 -ctv q8_0 \
+  --cache-prompt --cache-reuse 256 --metrics \
+  --override-kv tokenizer.ggml.eot_token_id=int:154827 \
+  --override-kv tokenizer.ggml.eom_token_id=int:154829
+```
+
+`-c` is the **total** context shared by `-np` slots. The defaults in
+`config.env` are 96 slots × ~2.7k tokens; raise `CTX_TOTAL` for longer slots.
+The two stop-token overrides are mandatory: the GGUF header carries only
+`eos=154820`, and without them the model emits `<|user|>` and keeps talking.
+
+## Benchmark protocol
+
+`bench.py` implements a closed-loop sweep (`request-rate=inf`, `max-concurrency
+C`), which is the right shape for a capacity number. For each point:
+
+1. flush the prefix cache (cold regime) or reuse a shared prefix (warm-shared);
+2. warm up `max(2*C, 32)` requests, capped at 256;
+3. flush again for a cold point;
+4. send `max(200, 5*C)` requests with a per-run `cache_salt`;
+5. repeat `--runs 3` and report the median.
+
+```bash
+./bench.sh \
+  --base-url http://127.0.0.1:30000 \
+  --concurrency "1 2 4 8 16 32 64 96 128" \
+  --isl 2048 --osl 256 --runs 3
+```
+
+Outputs: `results.json` (full schema), `results.csv` (one row per point/run).
+
+Headline metrics:
+
+- **output tok/s** — aggregate decode tokens / wall time
+- **total tok/s** — input + output; do not compare across different ISL
+- **TTFT** / **TPOT** p50/p99
+- **goodput** — requests meeting `TTFT ≤ 2 s` and `TPOT ≤ 80 ms`
+- **prefix hit rate** — from `/metrics` when the server exposes it
+
+For >3k tok/s aggregate, use `--workers 2..8`; a single CPython process can
+become the client bottleneck. For >64 concurrency, AIPerf or several bench
+processes are the safer client.
+
+### Expected ballpark
+
+There is **no published multi-user benchmark for REAP50**. The following are
+estimates informed by full-model and adjacent measurements; measure, do not
+promise:
+
+| Hardware | Experiment / config | Single stream | Aggregate (C16–64) |
+|---|---|---:|---:|
+| 2× 96 GB Blackwell | **A** SGLang + NVFP4, TP2 | ~150–200 tok/s | ~700–1,200 tok/s |
+| 1× 96 GB Blackwell | **B** llama.cpp + Q4_K_S, one card | ~20–60 | ~60–150 (C8–16) |
+| 2× 48 GB L40S | **B** llama.cpp + Q4_K_S/IQ4_XS, layer split | ~10–30 | ~30–120 (C8–16) |
+| 2× H100 80 GB | vLLM + W4A16, TP2 | ~60–100 | ~250–450 |
+| 4× L40 48 GB | llama.cpp Q4 / KTransformers FP8 | ~10–30 | ~30–120 |
+| 4× V100 32 GB | llama.cpp Q4_K_S, layer split | ~5–15 | ~20–50 |
+
+The prune halves the **weight footprint**, not the active compute: it still
+routes to 8 experts per token. The throughput win comes from fitting in fewer
+GPUs and leaving more room for KV/concurrency, not from a 2× faster token.
+
+## Caveats
+
+- **vLLM on SM120**: the NoPE sparse-MLA path asserts `pe_dim == 64`; the
+  REAP50 config has `qk_rope_head_dim = 0`. Use SGLang, or a patched vLLM
+  image. vLLM is the second choice here.
+- **FP8 vs NVFP4**: FP8 is +0.4 pp top-1, but 160.6 GiB leaves only ~20 GB for
+  KV/activations on 2× 96 GB (much less concurrency than NVFP4) and does not fit
+  2× 80 GB. Use it on 4× H100/H200 or a 192 GB node at shorter context.
+- **llama.cpp DSA**: the fork loads the indexer tensors but gates DSA off; the
+  11 sparse-attention layers run dense, so long context is compute-bound. The
+  published long-context assurance is 8,192 tokens, not the advertised 1M.
+- **V100**: no BF16, no FP8, no FP4. Use GGUF only; CUDA 13 dropped `sm_70`, so
+  build with `/usr/local/cuda-12.5` and `--cuda-arch 70`, or use Vulkan.
+- **v3/HOPE** weights are not evaluated; `install.sh` excludes `pass3-hope/`.
+  Do not benchmark v3 and call it v2.
+- **NFS**: keep the checkpoint on local scratch when the node has it. On
+  `bw01`/`uk-g6` the first load streams from `/work`; 760 GB RAM then holds the
+  page cache.
+- **Stop tokens**: always pass the two `--override-kv` flags for the GGUFs.
+
+## Layout
+
+| File | What |
+|---|---|
+| `install.sh` | image/venv, llama.cpp build, checkpoint download, `install-state.json` |
+| `serve.sh` | SGLang / vLLM / llama.cpp launch, health wait, pid/log, `--stop` |
+| `bench.py` | stdlib-only batched benchmark client (`--self-test` for CI) |
+| `bench.sh` | config defaults around `bench.py` |
+| `run-job.sh` | install → serve → wait → bench → stop, writes `job.json` |
+| `glm53-reap50.sbatch` | thin Slurm entry point |
+| `submit.sh` | fills partition/account/resources and submits |
+| `config.env` | every default, overrideable |
+
+## Sources
+
+- GGUF + patched llama.cpp: <https://huggingface.co/patrickbdevaney/GLM-5.3-Flash-REAP50-GGUF>
+- FP8 v2: <https://huggingface.co/patrickbdevaney/GLM-5.3-Flash-REAP50-FP8-v2>
+- NVFP4 v2: <https://huggingface.co/patrickbdevaney/GLM-5.3-Flash-REAP50-NVFP4-v2>
+- SGLang GLM-5.3-Flash cookbook: <https://docs.sglang.io/cookbook/autoregressive/GLM/GLM-5.3-Flash>
+- SGLang server args / tuning: <https://docs.sglang.io/docs/advanced_features/server_arguments>
+- vLLM GLM-5.3 support / benchmarks: <https://github.com/vllm-project/vllm/issues/56564>
+- 4× B200 / 4× RTX PRO 6000 SGLang results: <https://github.com/caiovicentino/glm-5.3-flash-sglang-4x-b200>
+- DGX Station / GB300 benchmarks: <https://github.com/catid/dgx_station_benchmarks/tree/main/glm-5.3-flash>
+- Benchmark methodology: <https://docs.vllm.ai/en/stable/cli/bench/serve/>, <https://docs.nvidia.com/aiperf/>

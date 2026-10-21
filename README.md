@@ -48,6 +48,7 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `bootstrap/` | disaster recovery: `rebuild-all.sh`, `toolchain-install.sh`, `checkouts.sh`, `state-init.sh`, `versions.lock` (`bootstrap/README.md`) |
 | `maint/` | `install-shims.sh`, `land.sh`, `salvage.sh`, `wt-audit.sh`, `conflicts.sh`, `trash-bulky.sh`, `check-home.sh`, `fuse-bench.sh`, `toolchain-size.sh` |
 | `env/env.sh`, `env/toolchain-mffsrv.sh` | user toolchain + caches profile; Troja's MPI/MKL toolchain profile |
+| `llm/glm53-reap50/` | install/serve/benchmark helper for pruned GLM-5.3-Flash (SGLang/vLLM/llama.cpp), with a batched-throughput client (`bench.py`) |
 | `tests/` | pytest suite (workstation tools; network-free) + `tests/run-cluster-tests.sh` (cluster suites, in Slurm) |
 | `docs/` | `config.md`, `gpu_batch.md`, `hpc_partial.md` |
 | `examples/slurmhelps.json` | whiteboxchallenge's config (Troja + LAN 1080 Ti) |
