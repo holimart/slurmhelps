@@ -111,6 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--kv-cells", type=int, default=0)
     p.add_argument("--kv-mib", type=float, default=0.0)
     p.add_argument("--host-cache-mib", type=float, default=0.0)
+    p.add_argument("--server-log", default="")
+    p.add_argument("--max-new-tokens", type=int, default=105000,
+                   help="abort rather than prefill more than this on top of existing cache")
     p.add_argument("--output-dir", default="cache-probe")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
@@ -178,6 +181,24 @@ def main(argv: list[str] | None = None) -> int:
             print(f"fill P={P} failed: {fill.error}", file=sys.stderr)
             rows.append({"prefix_tokens": P, "status": "fill_failed", "error": fill.error})
             break
+        # llama.cpp logs the restored prefix in the current fill request's
+        # "new prompt" block. That is the amount that was NOT prefilled.
+        logged = log_prompt_state(args.server_log) if args.server_log else None
+        if logged is None:
+            print(f"[guard] P={P}: no server log state; refusing to trust the cache",
+                  file=sys.stderr)
+            rows.append({"prefix_tokens": P, "status": "guard_unobservable"})
+            break
+        _, n_past = logged
+        reused = n_past
+        new_prefill = max(0, P - reused)
+        if new_prefill > args.max_new_tokens:
+            print(f"[guard] P={P}: restored={reused}, new_prefill={new_prefill} "
+                  f"(limit {args.max_new_tokens}); aborting", file=sys.stderr)
+            rows.append({"prefix_tokens": P, "status": "guard_prefill_overflow",
+                         "reused_prefix_tokens": reused,
+                         "new_prefill_tokens": new_prefill})
+            break
         cumulative += fill.ttft_s
         expected_new = P - prev if prev else P
         hit_samples = []
@@ -200,8 +221,10 @@ def main(argv: list[str] | None = None) -> int:
             "status": "ok",
             "suffix_tokens": args.suffix,
             "fill_ttft_s": round(fill.ttft_s, 4),
+            "reused_prefix_tokens": reused,
+            "new_prefill_tokens": new_prefill,
             "expected_new_tokens": expected_new,
-            "incremental_prefill_tok_s": round(expected_new / max(fill.ttft_s, 1e-9), 2),
+            "incremental_prefill_tok_s": round(new_prefill / max(fill.ttft_s, 1e-9), 2),
             "cumulative_fill_s": round(cumulative, 4),
             "hit_ttft_s": round(hit.ttft_s, 4),
             "hit_reuse_ratio": round(fill.ttft_s / max(hit.ttft_s, 1e-9), 2),
@@ -247,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "cache-probe.json").write_text(json.dumps(result, indent=2) + "\n")
     fields = ["prefix_tokens", "status", "suffix_tokens", "fill_ttft_s",
+              "reused_prefix_tokens", "new_prefill_tokens",
               "incremental_prefill_tok_s", "cumulative_fill_s", "hit_ttft_s",
               "hit_reuse_ratio", "hit_suffix_prefill_tok_s", "hit_decode_tok_s",
               "hit_output_tokens", "repeat_ttft_s", "repeat_reuse_ratio",

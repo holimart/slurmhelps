@@ -1,0 +1,58 @@
+{
+  "generated_at": "2026-10-22T07:39:43.627928+00:00",
+  "result_dir": "/work/ffa/holecem/runs/glm53-reap50/20261022T071702Z",
+  "rows": [
+    {
+      "context": 4096,
+      "concurrency": 8,
+      "status": "ok",
+      "completed": 8,
+      "failed": 0,
+      "ttft_s": 22.1272,
+      "prefill_tokens_per_s": 1170.229,
+      "decode_tokens_per_s": 50.813,
+      "output_tokens_per_s": 30.009,
+      "total_tokens_per_s": 933.376,
+      "tpot_ms": 93.197
+    },
+    {
+      "context": 16384,
+      "concurrency": 4,
+      "status": "ok",
+      "completed": 4,
+      "failed": 0,
+      "ttft_s": 40.3551,
+      "prefill_tokens_per_s": 1204.257,
+      "decode_tokens_per_s": 13.775,
+      "output_tokens_per_s": 8.914,
+      "total_tokens_per_s": 1084.304,
+      "tpot_ms": 133.13
+    },
+    {
+      "context": 65536,
+      "concurrency": 1,
+      "status": "ok",
+      "completed": 1,
+      "failed": 0,
+      "ttft_s": 62.2181,
+      "prefill_tokens_per_s": 992.219,
+      "decode_tokens_per_s": 33.643,
+      "output_tokens_per_s": 1.939,
+      "total_tokens_per_s": 936.967,
+      "tpot_ms": 29.958
+    },
+    {
+      "context": 262144,
+      "concurrency": 1,
+      "status": "ok",
+      "completed": 1,
+      "failed": 0,
+      "ttft_s": 476.878,
+      "prefill_tokens_per_s": 517.373,
+      "decode_tokens_per_s": 22.509,
+      "output_tokens_per_s": 0.265,
+      "total_tokens_per_s": 511.539,
+      "tpot_ms": 44.777
+    }
+  ]
+}

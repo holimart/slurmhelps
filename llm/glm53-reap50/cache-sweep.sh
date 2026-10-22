@@ -110,6 +110,7 @@ python3 "$HELPER/cache_probe.py" \
   --model "$SERVED_MODEL_NAME" \
   --prefixes "$PREFIXES" --suffix "$SUFFIX" --osl "$OSL" \
   --timeout "$TIMEOUT" \
+  --server-log "$RUN_DIR/server.log" --max-new-tokens 105000 \
   --kv-cells "$KV_CELLS" --kv-mib "$KV_MIB" --host-cache-mib "$HOST_MIB" \
   --output-dir "$RESULT_DIR"
 

@@ -275,6 +275,7 @@ the GGUF fork.
 - [2026-10-21 — Cache-probe design](experiments/2026-10-21-cache-probe-design.md) — tier/continuation/capacity measurement design, and the engine limitation that blocks a true GPU-vs-RAM tree test on the 96 GB node.
 - [2026-10-21 — Cache reuse on 2× L40S](experiments/2026-10-21-cache-reuse-2x48gb.md) — measured host-cache hit 0.54–1.09 s vs 171–425 s fill, active-slot repeat 0.18–0.42 s, and the 400K OOM ceiling. Raw: [CSV](experiments/data/2026-10-21-cache-reuse-2x48gb.csv) / [JSON](experiments/data/2026-10-21-cache-reuse-2x48gb.json).
 - [2026-10-22 — Vulkan smoke on 2× L40S](experiments/2026-10-22-vulkan-smoke-2x48gb.md) — Vulkan loads the model but OOMs in compute buffers on 96 GB; 4× L40 or IQ3_M is required.
+- [2026-10-22 — Context sweep + guarded cache probe](experiments/2026-10-22-context-cache-runs.md) — 4K/16K/64K/256K prefill/decode, and cache hits at 100/200/300K with the ≤105K-new-prefill guard. Raw: [context CSV](experiments/data/2026-10-22-context-sweep-2x48gb.csv) / [cache CSV](experiments/data/2026-10-22-cache-probe-2x48gb.csv).
 
 ## Why this stack
 
