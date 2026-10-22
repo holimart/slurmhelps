@@ -42,7 +42,7 @@ log "vulkan icd: $(ls /usr/share/vulkan/icd.d/*nvidia* 2>/dev/null | head -1)"
   if command -v vulkaninfo >/dev/null 2>&1; then vulkaninfo --summary 2>&1 | head -80; fi
 } > "$RESULT_DIR/backend.txt"
 
-if ! "$HELPER/serve.sh" --engine llamacpp --variant iq4_xs --background --wait; then
+if ! "$HELPER/serve.sh" --engine llamacpp --variant "${VULKAN_VARIANT:-$VARIANT}" --background --wait; then
   log "server did not start; see $RUN_DIR/server.log"
   cp -f "$RUN_DIR/server.log" "$RESULT_DIR/server.log" 2>/dev/null || true
   exit 1

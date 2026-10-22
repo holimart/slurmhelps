@@ -22,7 +22,7 @@ is.
 IQ4_XS 82 GiB, `-ngl 99 --split-mode layer -np 1 -c 8192 -b 4096 -ub 1024
 -fa off -ctk f16 -ctv f16 --no-mmap`.
 
-## Result: failed on memory, before token generation
+## IQ4_XS: failed on memory, before token generation
 
 The model loaded across both cards:
 
@@ -46,6 +46,38 @@ This is **Vulkan compute-buffer OOM**, not a missing mHC operator. With ~5 GB
 left per 48 GB card, Vulkan's preallocated matmul buffers do not fit. A 4× L40
 node (192 GB) has enough headroom, or 2× L40 with IQ3_M (67 GiB) would free
 ~15 GB.
+
+## IQ3_M: Vulkan works, but slowly
+
+The same server with **IQ3_M (67.2 GiB)** fits 2× L40S and completes a 4K
+prompt + 8-token generation:
+
+```text
+Vulkan0 model buffer = 33583.59 MiB
+Vulkan1 model buffer = 34938.18 MiB
+Vulkan0 compute      =  2660 MiB
+Vulkan1 compute      =  3146 MiB
+free after load      = 6003 / 5665 MiB
+```
+
+Measured by the smoke script:
+
+| Metric | Value |
+|---|---:|
+| Prompt | 4K |
+| TTFT | **20.32 s** |
+| Output | 8 tokens |
+| Output rate | **0.4 tok/s** |
+| Total (prompt+output) | 201.8 tok/s |
+| TPOT | 122.9 ms |
+
+This proves the Vulkan backend can execute GLM5-Next with IQ3_M, including the
+CPU fallback for `ggml_mhc_sinkhorn`. It is not a performance path: 4K TTFT is
+20 s and decode is ~8 tok/s before batching. The CPU mHC fallback is visible
+in the huge gap between the 4K prefill and the token rate.
+
+No 1M or 4× L40 Vulkan run was possible in this test; 96 GB is already tight
+at 4K with IQ4_XS and works at 4K with IQ3_M.
 
 ## Status of the 4× L40 run
 

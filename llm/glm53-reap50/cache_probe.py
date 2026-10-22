@@ -20,9 +20,11 @@ import argparse
 import csv
 import json
 import random
+import re
 import statistics
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,8 +45,55 @@ def parse_ints(text: str) -> list[int]:
     return [int(x) for x in text.replace(",", " ").split() if x.strip()]
 
 
+
+def slot_n_past(base_url: str) -> int | None:
+    """Ask llama-server for the active slot's n_past, if the endpoint exists."""
+    try:
+        with urllib.request.urlopen(base_url.rstrip("/") + "/slots", timeout=5) as r:
+            data = json.load(r)
+        vals = [int(s["n_past"]) for s in data if isinstance(s, dict) and "n_past" in s]
+        return max(vals) if vals else None
+    except Exception:
+        return None
+
+
+def log_prompt_state(path: str) -> tuple[int, int] | None:
+    """Return (task.n_tokens, n_past) from the last 'new prompt' block."""
+    try:
+        lines = Path(path).read_text(errors="replace").splitlines()
+    except OSError:
+        return None
+    last = None
+    for i, line in enumerate(lines):
+        if "| new prompt," not in line:
+            continue
+        m = re.search(r"task\.n_tokens = (\d+)", line)
+        if not m:
+            continue
+        n_tokens = int(m.group(1))
+        n_past = None
+        for nxt in lines[i + 1:i + 4]:
+            m2 = re.search(r"n_past = (\d+)", nxt)
+            if m2:
+                n_past = int(m2.group(1))
+                break
+        if n_past is not None:
+            last = (n_tokens, n_past)
+    return last
+
+
+def observed_state(base_url: str, log_path: str) -> tuple[int | None, int | None]:
+    """Prefer /slots; fall back to the server log. Returns (n_tokens, n_past)."""
+    npast = slot_n_past(base_url)
+    logged = log_prompt_state(log_path) if log_path else None
+    if logged:
+        return logged[0], npast if npast is not None else logged[1]
+    return (None, npast) if npast is not None else (None, None)
+
+
 def fmt(v: float | None, nd: int = 2) -> str:
     return "-" if v is None else f"{v:.{nd}f}"
+
 
 
 def main(argv: list[str] | None = None) -> int:
