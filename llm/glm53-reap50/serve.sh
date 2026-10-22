@@ -159,7 +159,7 @@ case "$ENGINE" in
       -ngl 99 --split-mode layer
       -np "$MAX_RUNNING" -c "$CTX_TOTAL"
       -b "$LLAMA_BATCH" -ub "$LLAMA_UBATCH"
-      -fa on -ctk "$LLAMA_KV_TYPE" -ctv "$LLAMA_KV_TYPE"
+      -fa "${LLAMA_FA:-on}" -ctk "$LLAMA_KV_TYPE" -ctv "$LLAMA_KV_TYPE"
       --cache-prompt --cache-reuse "$LLAMA_CACHE_REUSE")
     # NFS mmap page-faults ~10 MB/s here; sequential --no-mmap is much faster
     # and the 82 GiB fits in the job's 256 GiB RAM.

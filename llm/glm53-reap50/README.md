@@ -274,6 +274,7 @@ the GGUF fork.
 - [2026-10-21 — Faster prefill options](experiments/2026-10-21-faster-prefill-options.md) — why upstream llama.cpp DSA is the only SM89 prefill lever, and the 4×L40 FP8 / 2×H100 alternatives.
 - [2026-10-21 — Cache-probe design](experiments/2026-10-21-cache-probe-design.md) — tier/continuation/capacity measurement design, and the engine limitation that blocks a true GPU-vs-RAM tree test on the 96 GB node.
 - [2026-10-21 — Cache reuse on 2× L40S](experiments/2026-10-21-cache-reuse-2x48gb.md) — measured host-cache hit 0.54–1.09 s vs 171–425 s fill, active-slot repeat 0.18–0.42 s, and the 400K OOM ceiling. Raw: [CSV](experiments/data/2026-10-21-cache-reuse-2x48gb.csv) / [JSON](experiments/data/2026-10-21-cache-reuse-2x48gb.json).
+- [2026-10-22 — Vulkan smoke on 2× L40S](experiments/2026-10-22-vulkan-smoke-2x48gb.md) — Vulkan loads the model but OOMs in compute buffers on 96 GB; 4× L40 or IQ3_M is required.
 
 ## Why this stack
 
@@ -488,6 +489,7 @@ GPUs and leaving more room for KV/concurrency, not from a 2× faster token.
 | `bench.sh` | config defaults around `bench.py` |
 | `context-sweep.sh` | long-context sweep: restart server per context, prefill/decode tok/s, per-point timeout |
 | `cache_probe.py`, `cache-sweep.sh` | prefix-ladder cache probe: fill + hit + active-slot repeat; inferred misses; explicit unmeasured gaps |
+| `vulkan-smoke.sh` | short Vulkan load/generate smoke; prints the backend and the 4×L40 requirement |
 | `experiments/` | dated measurement write-ups and the raw CSV/JSON result tables |
 | `run-job.sh` | install → serve → wait → bench → stop, writes `job.json` |
 | `glm53-reap50.sbatch` | thin Slurm entry point |
