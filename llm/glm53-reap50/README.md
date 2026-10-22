@@ -277,6 +277,7 @@ the GGUF fork.
 - [2026-10-22 — Vulkan smoke on 2× L40S](experiments/2026-10-22-vulkan-smoke-2x48gb.md) — Vulkan loads the model but OOMs in compute buffers on 96 GB; 4× L40 or IQ3_M is required.
 - [2026-10-22 — Context sweep + guarded cache probe](experiments/2026-10-22-context-cache-runs.md) — 4K/16K/64K/256K prefill/decode, and cache hits at 100/200/300K with the ≤105K-new-prefill guard. Raw: [context CSV](experiments/data/2026-10-22-context-sweep-2x48gb.csv) / [cache CSV](experiments/data/2026-10-22-cache-probe-2x48gb.csv).
 - [2026-10-22 — Paged-KV engines and DeepSeek DeepInfer](experiments/2026-10-22-paged-kv-and-deepinfer.md) — where to get vLLM/SGLang, SM80 community forks, and which DeepSeek serving ideas transfer to GLM.
+- [2026-10-22 — Paged-KV attempt on 2× A100](experiments/2026-10-22-paged-kv-a100-attempt.md) — SM80 fork + NVFP4 v2 blocked by checkpoint key naming; no perf result.
 
 ## Why this stack
 
@@ -492,6 +493,7 @@ GPUs and leaving more room for KV/concurrency, not from a 2× faster token.
 | `context-sweep.sh` | long-context sweep: restart server per context, prefill/decode tok/s, per-point timeout |
 | `cache_probe.py`, `cache-sweep.sh` | prefix-ladder cache probe: fill + hit + active-slot repeat; inferred misses; explicit unmeasured gaps |
 | `vulkan-smoke.sh` | short Vulkan load/generate smoke; prints the backend and the 4×L40 requirement |
+| `paged-kv-run.sh`, `paged_probe.py` | paged-KV vLLM/SGLang path: cache ladder + context/concurrency (A100 run blocked by checkpoint key mapping) |
 | `experiments/` | dated measurement write-ups and the raw CSV/JSON result tables |
 | `run-job.sh` | install → serve → wait → bench → stop, writes `job.json` |
 | `glm53-reap50.sbatch` | thin Slurm entry point |
