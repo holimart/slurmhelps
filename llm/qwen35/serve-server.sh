@@ -43,6 +43,11 @@ export JIT_NVCC_COMPILER=${JIT_NVCC_COMPILER:-$CUDA_HOME/bin/nvcc}
 export CC=${CC:-gcc}
 export CXX=${CXX:-g++}
 export PYTHONUNBUFFERED=1
+# ampere02's two A100s are linked "NODE" (PCIe through the host bridge), not NVLink. TP2 NCCL
+# init hung there twice (workers at 100% CPU, ~715 MiB of GPU memory for an hour, no log
+# after the pynccl line), so peer-to-peer is off by default; set NCCL_P2P_DISABLE=0 to retry it.
+export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-/tmp/triton-$VARIANT}
 
 [ -x "$VLLM_BIN" ] || { echo "qwen serve: missing vllm: $VLLM_BIN" >&2; exit 2; }
