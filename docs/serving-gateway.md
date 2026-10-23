@@ -361,6 +361,42 @@ slurmhelps serve relay --listen 127.0.0.1:18000 --target "$(slurmhelps serve end
 It is a dumb TCP relay, loopback-only, and logs connection counts, not
 payloads. It stops when the job stops or the controller restarts it.
 
+### Connecting other engines and clients
+
+The transport contract is deliberately generic:
+
+- the backend must listen on the configured port and expose `GET /health`
+  plus OpenAI-compatible `GET /v1/models`, `POST /v1/completions` and
+  `POST /v1/chat/completions`;
+- the worker writes the phase/state file and starts whatever command is
+  supplied; it does not contain model-specific flags;
+- the gateway/tunnel only speak HTTP, so OpenCode, an OpenCode harness, curl,
+  or another OpenAI client use the same endpoint.
+
+The default backend is `llm/glm53-reap50/serve-server.sh` (SM80 vLLM fork).
+To use a different backend, pass a command after `--`:
+
+```bash
+slurmhelps-serve up --yes --backend-command bash /path/to/engine.sh
+```
+
+The command must honor `PORT`, `MAX_MODEL_LEN`, `MAX_NUM_SEQS`,
+`MAX_NUM_BATCHED_TOKENS`, `GPU_MEM_UTIL` and `KV_DTYPE` from the environment
+(or accept equivalent flags). The worker still provides state, heartbeat,
+load history and SIGTERM handling; engine-specific KV-capacity parsing is
+best-effort.
+
+Any OpenAI client can then use:
+
+```bash
+slurmhelps-serve endpoint
+export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
+# export OPENAI_API_KEY=...   # only if the gateway has auth enabled
+```
+
+For OpenCode, copy [`examples/opencode-serve.json`](../examples/opencode-serve.json)
+to the OpenCode config and point `baseURL` at the endpoint.
+
 ### API
 
 - `GET /health` — liveness only;
