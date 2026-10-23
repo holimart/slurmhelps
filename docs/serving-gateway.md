@@ -385,6 +385,97 @@ LRU retains common prefixes and the most recent sessions; never evict blocks
 referenced by an active request. Use prefix hashes over token IDs, not raw
 text, and include model/tokenizer identity in the key.
 
+### Disk spill research (design only — not wired)
+
+The SM80 fork is less closed than the first run suggested:
+
+- `from vllm.config import KVTransferConfig` **works** in
+  `vllm-glm53-sm80.sif`;
+- the connector factory registers **`LMCacheConnectorV1`** and
+  **`LMCacheMPConnector`**;
+- the `lmcache` Python package is **not installed** in the image.
+
+So raw-KV spill is not an engine-API dead end. It is an integration task:
+
+1. Build an image (or overlay/venv) containing a compatible `lmcache`
+   version. The vLLM/LMCache versions must match; do not assume the latest
+   LMCache works with this older fork.
+2. Configure local disk offload (LMCache docs):
+   `LMCACHE_USE_EXPERIMENTAL=True`, `chunk_size: 256`,
+   `local_disk: "file:///work/.../kv"`, `local_cpu: true`,
+   `max_local_cpu_size`, `max_local_disk_size`, `LMCACHE_CONFIG_FILE`.
+3. Start vLLM with:
+
+   ```text
+   --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_both"}'
+   ```
+
+4. Verify with repeated long prompts that the LMCache hit-token counter rises
+   and TTFT falls; then benchmark restart/requeue.
+
+Why this is the preferred route over a custom serializer:
+
+- LMCache uses **256-token chunks stored as separate files**, not one giant
+  KV blob; it writes asynchronously, evicts by LRU and can prefetch from disk
+  to CPU/GPU.
+- A preemption does not need a whole-job freeze: completed chunks are already
+  durable; only the last incomplete chunk is lost. This directly addresses
+  “the job was killed, can the next start reuse work?”
+- It has a CPU tier and disk tier, matching the L1/L2 design above.
+- It avoids inventing a block-table/tensor format that the fork may change
+  underneath us.
+
+Caveats:
+
+- LMCache chunks are keyed by token/model identity; changing weights,
+  tokenizer, block size, KV dtype or TP layout invalidates them.
+- Local disk files are only node-local unless the directory is on Lustre;
+  a requeue to another node must use the same shared path.
+- LMCache is not measured here. The fork’s compatibility is unproven until a
+  build-and-replay test succeeds.
+- SGLang HiCache is the other mature design (L1 GPU / L2 host / L3 file,
+  Mooncake, HF3FS, NIXL, write-through/back policies). It is not usable for
+  this A100 model because SGLang has no SM80/SM89 GLM-5.3 sparse-DSA backend.
+- vLLM’s newer shortcut (`--kv-offloading-backend lmcache
+  --kv-offloading-size ...`) is not assumed to exist in this fork; use the
+  explicit `KVTransferConfig` only after checking `vllm serve --help`.
+
+References:
+
+- LMCache local disk: <https://docs.lmcache.ai/kv_cache/local_storage.html>
+- vLLM + LMCache examples and `LMCacheConnectorV1`:
+  <https://docs.vllm.ai/en/stable/examples/disaggregated/lmcache/>
+- SGLang HiCache design:
+  <https://docs.sglang.ai/advanced_features/hicache_design.html>
+
+### Lustre characteristics and measured rates
+
+`/work` is Lustre with **3 OSTs**; the default directory stripe is
+`stripe_count=1`, `stripe_size=1 MiB`. A single big file therefore lands on
+one OST. `lfs df` showed ~92% full at the time of the run, so 45 GiB spill
+files need a cap and cleanup.
+
+We did **not** get a clean raw one-file read/write benchmark: the 8 GiB `dd`
+test was interrupted by the storage-quota/overlimit intervention and the
+partial file was deleted. Do not quote a raw GB/s number from that attempt.
+
+What we do have is **end-to-end model-load throughput**, which is a lower
+bound and includes container/GPU/engine work:
+
+| Path | Bytes | Observed | Effective rate |
+|---|---:|---:|---:|
+| Cold model load from Lustre | 98 GiB | 1,559 s | **~64 MiB/s = 0.063 GiB/s** |
+| Warm page-cache model load | 98 GiB | 374.7 s | **~274 MiB/s = 0.268 GiB/s** |
+| Earlier clean A100 load | 98 GiB | ~540 s | **~186 MiB/s = 0.182 GiB/s** |
+
+These are not raw `dd` numbers. For spill planning, use a range rather than a
+single claim: on this `/work` layout a single-stripe file may be far below the
+filesystem aggregate; multiple chunk files (LMCache’s native layout) or an
+explicitly striped directory (`lfs setstripe -c 3`) should be used before any
+GB/s claim. At 100 MiB/s a 17 GiB 700K KV snapshot takes ~170 s; at 500 MiB/s
+it takes ~34 s. Compare that to the measured 235 s cold 700K prefill and 5.9 s
+GPU-cache hit before deciding whether disk spill helps.
+
 ## 6. SSH access and helpers
 
 No public port is opened.

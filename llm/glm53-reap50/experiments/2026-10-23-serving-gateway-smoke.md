@@ -99,9 +99,11 @@ Example provider config: [`examples/opencode-serve.json`](../../examples/opencod
 
 ## What is not built
 
-Raw-KV spill to Lustre is **not** implemented. The SM80 fork has no KV
-export/import API; the design keeps `spill.mode=state-only` as the safe path and
-gates raw KV behind LMCache/HiCache or a custom serializer plus benchmarks.
-Idle-time/size policy and atomic manifests are described in
+Raw-KV spill to Lustre is **not** implemented. The SM80 fork does expose
+`KVTransferConfig` and registers `LMCacheConnectorV1`, but the `lmcache`
+package is not installed; this is an integration task, not a missing engine
+API. The design keeps `spill.mode=state-only` as the safe path and gates raw KV
+behind a verified LMCache build plus benchmarks. Idle-time/size policy and
+atomic manifests are described in
 [`docs/serving-gateway.md`](../../docs/serving-gateway.md), but no fake KV
 snapshot is claimed.
