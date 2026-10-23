@@ -5,6 +5,61 @@ Status: P0/P1 implemented and exercised on the real 2× A100 server; see
 Raw-KV Lustre spill remains gated behind engine support and is not implemented;
 the default is state-only/no raw-KV spill.
 
+## Implementation map (as built)
+
+Links point at the code that implements each part of this design.
+
+| Design area | Implementation | Tests / evidence |
+|---|---|---|
+| CLI and process lifecycle | [`bin/slurmhelps-serve`](../bin/slurmhelps-serve), [`lib/slurmhelps/serving/cli.py`](../lib/slurmhelps/serving/cli.py) | [`tests/test_serving_cli.py`](../tests/test_serving_cli.py) |
+| Config, defaults, Slurm argv | [`config.py`](../lib/slurmhelps/serving/config.py) | [`test_serving_config.py`](../tests/test_serving_config.py) |
+| Atomic state, phases, load history | [`state.py`](../lib/slurmhelps/serving/state.py) | [`test_serving_state.py`](../tests/test_serving_state.py) |
+| Login-side submit/poll/status | [`controller.py`](../lib/slurmhelps/serving/controller.py) | [`test_serving_controller.py`](../tests/test_serving_controller.py) |
+| Compute-side worker and SIGTERM | [`worker.py`](../lib/slurmhelps/serving/worker.py) | [`test_serving_worker.py`](../tests/test_serving_worker.py) |
+| SSH `-L` and loopback relay | [`tunnel.py`](../lib/slurmhelps/serving/tunnel.py) | [`test_serving_tunnel.py`](../tests/test_serving_tunnel.py) |
+| OpenAI gateway/auth/admission | [`gateway.py`](../lib/slurmhelps/serving/gateway.py) | [`test_serving_gateway.py`](../tests/test_serving_gateway.py) |
+| Mock GPU/OpenAI backend | [`mock.py`](../lib/slurmhelps/serving/mock.py) | [`test_serving_mock.py`](../tests/test_serving_mock.py), [`test_serving_smoke.py`](../tests/test_serving_smoke.py) |
+| OpenCode integration | [`examples/opencode-serve.json`](../examples/opencode-serve.json) | [`test_serving_opencode.py`](../tests/test_serving_opencode.py) |
+| Real GLM A100 backend | [`llm/glm53-reap50/serve-server.sh`](../llm/glm53-reap50/serve-server.sh) | [`2026-10-23-serving-gateway-smoke.md`](../llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md) |
+| HTTP smoke matrix | [`tests/serve_smoke.py`](../tests/serve_smoke.py) | real and mock JSON under [`experiments/data`](../llm/glm53-reap50/experiments/data) |
+| Idle/state-only spill | [`spill.py`](../lib/slurmhelps/serving/spill.py) | [`test_serving_spill.py`](../tests/test_serving_spill.py) |
+
+### Named components / apps
+
+| Name | What it is |
+|---|---|
+| `slurmhelps-serve` | the operator CLI (`up`, `status`, `wait`, `endpoint`, `tunnel`, `relay`, `gateway`, `spill`, `down`, `mock`, `smoke`, `doctor`) |
+| `slurmhelps.serving.controller` | login-side controller for one Slurm allocation |
+| `slurmhelps.serving.worker` | compute-side process/state supervisor |
+| `slurmhelps.serving.gateway` | optional loopback OpenAI proxy with auth/admission |
+| `slurmhelps.serving.mock` | deterministic no-GPU OpenAI backend |
+| `serve-server.sh` | GLM-5.3 REAP50 SM80 vLLM backend |
+| `serve_smoke.py` | 10-check HTTP smoke matrix |
+| `opencode-serve.json` | OpenCode provider configuration |
+
+### Public APIs and environment
+
+HTTP:
+
+- `GET /health`
+- `GET /status` (gateway-local; controller status is also available on the login node)
+- `GET /v1/models`
+- `POST /v1/completions`
+- `POST /v1/chat/completions`
+- `GET /metrics` (where the backend provides it)
+
+Worker/backend environment (parameterizable):
+
+```text
+PORT, MAX_MODEL_LEN, MAX_NUM_SEQS, MAX_NUM_BATCHED_TOKENS,
+GPU_MEM_UTIL, KV_DTYPE, BLOCK_SIZE, ENABLE_CHUNKED_PREFILL,
+ENABLE_TOOL_CALLS, TOOL_CALL_PARSER, WORK_ROOT
+```
+
+The API key is not passed through these variables by the CLI. `key_env` names
+the operator's environment variable (`SLURMHELPS_API_KEY` by default); no value
+is stored in the repo or state.
+
 ## Goal
 
 Run one defined model on a defined Slurm GPU allocation and make it available
@@ -489,17 +544,60 @@ mixed-output schedules.
 
 ## 10. Delivery phases
 
-1. **P0 — controller/status/tunnel**: `serve up/status/wait/endpoint/tunnel/
-   down`, state machine, load ETA from history, Slurm submit with preemptible
-   defaults. No custom proxy.
-2. **P1 — gateway**: OpenAI passthrough, queue limit, request IDs, metrics,
-   optional `coalesce_ms=0`; verify continuous batching behavior.
-3. **P2 — cache**: host-RAM tier via engine-supported swap/LMCache; measure
-   restore and capacity; only then enable.
-4. **P3 — spill**: state-only journal first; raw-KV Lustre snapshot only after
-   a separate benchmark; never on by default.
-5. **P4 — hardening**: preemption drills, stale-state detection, auth, tunnel
-   recovery, load ETA calibration.
+1. **P0 — controller/status/tunnel — DONE**: `serve up/status/wait/endpoint/
+   tunnel/down`, state machine, load history, preemptible Slurm defaults.
+2. **P1 — gateway — DONE**: OpenAI passthrough, SSE, bearer auth, admission,
+   request IDs, optional `coalesce_ms=0`; real 32-way + 429 test.
+3. **P2 — cache — NOT DONE**: host-RAM tier via engine-supported swap/LMCache
+   is still a research step; no host-KV capacity claim.
+4. **P3 — spill — PARTIAL**: state-only manifest is implemented; raw-KV Lustre
+   snapshot remains gated behind an engine serializer/benchmark.
+5. **P4 — hardening — PARTIAL**: preemption/state/auth/tunnel/load history
+   covered by tests and one real run; long soak and preemption drills remain.
+
+## 11. Implementation notes from the real run
+
+- Commits: [`4132131`](https://github.com/holimart/slurmhelps/commit/4132131)
+  (implementation) and [`fa260a4`](https://github.com/holimart/slurmhelps/commit/fa260a4)
+  (engine/client connection contract). The later doc/implementation map is
+  committed on top of these.
+- Real backend: [`serve-server.sh`](../llm/glm53-reap50/serve-server.sh) with
+  `vllm-glm53-sm80.sif`, the `glm4v.py` prefix patch and the checkpoint
+  dense-MLP quant ignore. It uses `TRITON_MLA_SPARSE`, BF16 KV, chunked prefill
+  and `--enable-auto-tool-choice --tool-call-parser glm47` for OpenCode.
+- `mem=220G` is deliberate: 260G did not fit beside the existing CPU jobs on
+  `ampere02`; 220G did. The node had 760G total.
+- `config.env` defaults `PORT=30000` and Blackwell FP8 KV. The generated
+  worker command exports `PORT`, `MAX_MODEL_LEN`, `MAX_NUM_SEQS`,
+  `MAX_NUM_BATCHED_TOKENS`, `GPU_MEM_UTIL` and `KV_DTYPE` so the serving config
+  wins.
+- `nice=100` correctly kept the job gentle but made it wait; the smoke used
+  `scontrol update JobId=... Nice=0` to start it. Defaults remain `nice=100`.
+- Measured model startup: **1,559 s cold from Lustre under contention** and
+  **374.7 s warm page cache on the same node**. The earlier clean A100 weight
+  load was ~9 min. Warm page cache is node-local and can be lost on requeue.
+- Measured KV: **1,765,762 tokens**, **2.25×** at 786,432. Cold 690K prefill
+  **235 s**; 700K cache hit **5.89 s**; two concurrent 700K cache hits
+  **1.92 s / 2.94 s**.
+- Full test suite: **280 passed**. The real 10-check HTTP matrix passed
+  directly and through the gateway; auth was 401/200 and admission was
+  32×200 + 1×429. OpenCode passed against both mock and real endpoints.
+- The serving job was stopped after the run; `ampere02` GPUs were returned.
+- Raw-KV spill was not faked. Only the state-only manifest and idle policy are
+  implemented; the SM80 fork has no KV export/import API.
+
+### Reproduce the smoke
+
+```bash
+cd /work/ffa/holecem/slurmhelps-fleet
+PYTHONPATH=lib python3 -m pytest -q
+
+# after the server is ready:
+PYTHONPATH=lib python3 tests/serve_smoke.py \
+  --base-url http://ampere02:8000 --model glm53-reap50 \
+  --contexts '500 800' --concurrency '1 2 4 8' \
+  --model-max-len 786432
+```
 
 ## Open questions to settle by measurement
 
