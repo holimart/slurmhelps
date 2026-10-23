@@ -1,8 +1,9 @@
 # Serving gateway — master design
 
-Status: design + verification plan. No production server is implemented by this
-document. The measured A100/H100 results are in
-[`llm/glm53-reap50/experiments/`](../llm/glm53-reap50/experiments/).
+Status: P0/P1 implemented and exercised on the real 2× A100 server; see
+[`llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md`](../llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md).
+Raw-KV Lustre spill remains gated behind engine support and is not implemented;
+the default is state-only/no raw-KV spill.
 
 ## Goal
 
@@ -88,20 +89,20 @@ GLM-5.3-Flash REAP50 / 2× A100 starting point, not claims of optimality.
     "partition": "ffa-preempt",
     "account": "from cluster.account",
     "cpus": 8,
-    "mem": "260G",
+    "mem": "220G",
     "time": "04:00:00",
     "requeue": true,
     "nice": 100,
     "exclusive": false,
 
-    "max_model_len": 327680,
+    "max_model_len": 786432,
     "max_num_seqs": 32,
     "max_num_batched_tokens": 8192,
     "gpu_memory_utilization": 0.94,
     "kv_cache_dtype": "bfloat16",
     "block_size": 128,
 
-    "host_kv_ram_gib": 128,
+    "host_kv_ram_gib": 96,
     "queue_limit": 64,
     "coalesce_ms": 0,
 
@@ -136,6 +137,12 @@ Notes:
 - `max_num_seqs` is the engine's maximum active sequences;
   `max_num_batched_tokens` is the per-iteration token budget. Both are
   required because they cap different things.
+- `max_model_len` defaults to **786,432** tokens (768K). The checkpoint's
+  text limit is **1,048,576**, and the measured A100 KV capacity is ~1.95M
+  tokens, so one 700K request fits and two 700K requests fit only with
+  careful admission. This is a capacity limit, not a promise that 700K
+  prefill is fast: measured cold 690K prefill was **235 s**, while a 700K
+  request sharing the cached prefix returned in **5.9 s**.
 - `host_kv_ram_gib` is a **host** cache budget, separate from GPU KV. It must
   fit inside `mem` together with the model and worker overhead.
 - `coalesce_ms` defaults to **0**. A multi-second batching window would add
@@ -288,7 +295,7 @@ across both GPUs (44.9 GiB for 1.95M tokens). Keep the tiers explicit:
 | Tier | What | Default |
 |---|---|---|
 | L0 | GPU paged prefix cache | 22.45 GiB/GPU, ~1.95M tokens |
-| L1 | host RAM prefix/session cache | 128 GiB, optional |
+| L1 | host RAM prefix/session cache | 96 GiB, optional |
 | L2 | Lustre idle snapshot | disabled by default |
 | L3 | recompute from prompt text | always available |
 
@@ -381,7 +388,7 @@ Default job shape:
 #SBATCH -p ffa-preempt
 #SBATCH --gres=gpu:a100:2
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=260G
+#SBATCH --mem=220G
 #SBATCH --time=04:00:00
 #SBATCH --requeue
 #SBATCH --nice=100

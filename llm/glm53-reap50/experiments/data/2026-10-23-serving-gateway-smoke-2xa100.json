@@ -1,0 +1,265 @@
+{
+  "base_url": "http://127.0.0.1:18002",
+  "model": "glm53-reap50",
+  "started_at": "2026-10-23T14:49:18Z",
+  "results": [
+    {
+      "name": "health",
+      "status": "pass",
+      "detail": "HTTP 200",
+      "data": {}
+    },
+    {
+      "name": "models",
+      "status": "pass",
+      "detail": "glm53-reap50",
+      "data": {}
+    },
+    {
+      "name": "chat_nonstream",
+      "status": "pass",
+      "detail": "2.683s, usage={'prompt_tokens': 550, 'total_tokens': 582, 'completion_tokens': 32, 'prompt_tokens_details': None, 'completion_tokens_details': None}",
+      "data": {
+        "elapsed_s": 2.6825491711497307,
+        "usage": {
+          "prompt_tokens": 550,
+          "total_tokens": 582,
+          "completion_tokens": 32,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        }
+      }
+    },
+    {
+      "name": "chat_stream",
+      "status": "pass",
+      "detail": "33 chunks, first=0.192s",
+      "data": {
+        "chunks": 33,
+        "first_s": 0.19224474811926484
+      }
+    },
+    {
+      "name": "cache_hit",
+      "status": "warn",
+      "detail": "cached=None->None, ttft=0.713->0.712s",
+      "data": {
+        "cached_tokens": [
+          null,
+          null
+        ],
+        "elapsed_s": [
+          0.7127145677804947,
+          0.7122076358646154
+        ]
+      }
+    },
+    {
+      "name": "shared_prefix_concurrent",
+      "status": "pass",
+      "detail": "short=1.842s long=43.182s",
+      "data": {
+        "results": [
+          {
+            "i": 0,
+            "code": 200,
+            "elapsed": 1.8423233102075756,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 587,
+              "completion_tokens": 16,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 1,
+            "code": 200,
+            "elapsed": 6.059339793864638,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 635,
+              "completion_tokens": 64,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 2,
+            "code": 200,
+            "elapsed": 11.45167949097231,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 699,
+              "completion_tokens": 128,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 3,
+            "code": 200,
+            "elapsed": 22.21861668303609,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 827,
+              "completion_tokens": 256,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 4,
+            "code": 200,
+            "elapsed": 43.18239779910073,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 1083,
+              "completion_tokens": 512,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "concurrency_sweep",
+      "status": "pass",
+      "detail": "8 points",
+      "data": {
+        "points": [
+          {
+            "context": 500,
+            "concurrency": 1,
+            "ok": true,
+            "elapsed_s": 2.679690152872354,
+            "codes": [
+              200
+            ],
+            "output_tokens_per_s": 11.9416791399182
+          },
+          {
+            "context": 500,
+            "concurrency": 2,
+            "ok": true,
+            "elapsed_s": 2.963063785340637,
+            "codes": [
+              200,
+              200
+            ],
+            "output_tokens_per_s": 21.59926502987599
+          },
+          {
+            "context": 500,
+            "concurrency": 4,
+            "ok": true,
+            "elapsed_s": 3.2183100320398808,
+            "codes": [
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 39.772426747484296
+          },
+          {
+            "context": 500,
+            "concurrency": 8,
+            "ok": true,
+            "elapsed_s": 3.7118664258159697,
+            "codes": [
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 68.9679990151381
+          },
+          {
+            "context": 800,
+            "concurrency": 1,
+            "ok": true,
+            "elapsed_s": 2.765717253088951,
+            "codes": [
+              200
+            ],
+            "output_tokens_per_s": 11.570235520012073
+          },
+          {
+            "context": 800,
+            "concurrency": 2,
+            "ok": true,
+            "elapsed_s": 3.133132917340845,
+            "codes": [
+              200,
+              200
+            ],
+            "output_tokens_per_s": 20.426838467586666
+          },
+          {
+            "context": 800,
+            "concurrency": 4,
+            "ok": true,
+            "elapsed_s": 3.542615312151611,
+            "codes": [
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 36.13149854598779
+          },
+          {
+            "context": 800,
+            "concurrency": 8,
+            "ok": true,
+            "elapsed_s": 4.319946988020092,
+            "codes": [
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 59.25998645583596
+          }
+        ]
+      }
+    },
+    {
+      "name": "max_model_len",
+      "status": "pass",
+      "detail": "HTTP 400",
+      "data": {
+        "body": {
+          "error": {
+            "message": "max_tokens=786433 cannot be greater than max_model_len=max_total_tokens=786432. Please request fewer output tokens. (parameter=max_tokens, value=786433)",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400
+          }
+        }
+      }
+    },
+    {
+      "name": "auth",
+      "status": "pass",
+      "detail": "bad=401 good=200",
+      "data": {}
+    },
+    {
+      "name": "queue_limit",
+      "status": "pass",
+      "detail": "codes=[200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 429]",
+      "data": {}
+    }
+  ]
+}

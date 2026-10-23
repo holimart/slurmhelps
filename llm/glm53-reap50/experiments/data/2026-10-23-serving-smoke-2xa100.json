@@ -1,0 +1,265 @@
+{
+  "base_url": "http://ampere02:8000",
+  "model": "glm53-reap50",
+  "started_at": "2026-10-23T14:47:04Z",
+  "results": [
+    {
+      "name": "health",
+      "status": "pass",
+      "detail": "HTTP 200",
+      "data": {}
+    },
+    {
+      "name": "models",
+      "status": "pass",
+      "detail": "glm53-reap50",
+      "data": {}
+    },
+    {
+      "name": "chat_nonstream",
+      "status": "pass",
+      "detail": "2.669s, usage={'prompt_tokens': 550, 'total_tokens': 582, 'completion_tokens': 32, 'prompt_tokens_details': None, 'completion_tokens_details': None}",
+      "data": {
+        "elapsed_s": 2.668760205153376,
+        "usage": {
+          "prompt_tokens": 550,
+          "total_tokens": 582,
+          "completion_tokens": 32,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        }
+      }
+    },
+    {
+      "name": "chat_stream",
+      "status": "pass",
+      "detail": "33 chunks, first=0.192s",
+      "data": {
+        "chunks": 33,
+        "first_s": 0.19182071276009083
+      }
+    },
+    {
+      "name": "cache_hit",
+      "status": "warn",
+      "detail": "cached=None->None, ttft=0.705->0.700s",
+      "data": {
+        "cached_tokens": [
+          null,
+          null
+        ],
+        "elapsed_s": [
+          0.7048931238241494,
+          0.7003175537101924
+        ]
+      }
+    },
+    {
+      "name": "shared_prefix_concurrent",
+      "status": "pass",
+      "detail": "short=1.848s long=43.197s",
+      "data": {
+        "results": [
+          {
+            "i": 0,
+            "code": 200,
+            "elapsed": 1.847712276969105,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 587,
+              "completion_tokens": 16,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 1,
+            "code": 200,
+            "elapsed": 6.056710692122579,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 635,
+              "completion_tokens": 64,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 2,
+            "code": 200,
+            "elapsed": 11.465338384266943,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 699,
+              "completion_tokens": 128,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 3,
+            "code": 200,
+            "elapsed": 22.258403004147112,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 827,
+              "completion_tokens": 256,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          },
+          {
+            "i": 4,
+            "code": 200,
+            "elapsed": 43.19735486386344,
+            "usage": {
+              "prompt_tokens": 571,
+              "total_tokens": 1083,
+              "completion_tokens": 512,
+              "prompt_tokens_details": null,
+              "completion_tokens_details": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "concurrency_sweep",
+      "status": "pass",
+      "detail": "8 points",
+      "data": {
+        "points": [
+          {
+            "context": 500,
+            "concurrency": 1,
+            "ok": true,
+            "elapsed_s": 2.6676517417654395,
+            "codes": [
+              200
+            ],
+            "output_tokens_per_s": 11.9955687989552
+          },
+          {
+            "context": 500,
+            "concurrency": 2,
+            "ok": true,
+            "elapsed_s": 2.969694255385548,
+            "codes": [
+              200,
+              200
+            ],
+            "output_tokens_per_s": 21.55104010587482
+          },
+          {
+            "context": 500,
+            "concurrency": 4,
+            "ok": true,
+            "elapsed_s": 3.217192684765905,
+            "codes": [
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 39.786239912240056
+          },
+          {
+            "context": 500,
+            "concurrency": 8,
+            "ok": true,
+            "elapsed_s": 3.820578611921519,
+            "codes": [
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 67.00555753549789
+          },
+          {
+            "context": 800,
+            "concurrency": 1,
+            "ok": true,
+            "elapsed_s": 2.7173729580827057,
+            "codes": [
+              200
+            ],
+            "output_tokens_per_s": 11.776079505324219
+          },
+          {
+            "context": 800,
+            "concurrency": 2,
+            "ok": true,
+            "elapsed_s": 3.0865615508519113,
+            "codes": [
+              200,
+              200
+            ],
+            "output_tokens_per_s": 20.73504738058296
+          },
+          {
+            "context": 800,
+            "concurrency": 4,
+            "ok": true,
+            "elapsed_s": 3.5301512088626623,
+            "codes": [
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 36.25907005871253
+          },
+          {
+            "context": 800,
+            "concurrency": 8,
+            "ok": true,
+            "elapsed_s": 4.258504368830472,
+            "codes": [
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200,
+              200
+            ],
+            "output_tokens_per_s": 60.11500231718822
+          }
+        ]
+      }
+    },
+    {
+      "name": "max_model_len",
+      "status": "pass",
+      "detail": "HTTP 400",
+      "data": {
+        "body": {
+          "error": {
+            "message": "max_tokens=786433 cannot be greater than max_model_len=max_total_tokens=786432. Please request fewer output tokens. (parameter=max_tokens, value=786433)",
+            "type": "BadRequestError",
+            "param": "max_tokens",
+            "code": 400
+          }
+        }
+      }
+    },
+    {
+      "name": "auth",
+      "status": "skip",
+      "detail": "server has no application key",
+      "data": {}
+    },
+    {
+      "name": "queue_limit",
+      "status": "skip",
+      "detail": "no --max-active configured",
+      "data": {}
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "date": "2026-10-23",
+  "hardware": "2x A100 80GB (ampere02)",
+  "model": "GLM-5.3-Flash-REAP50-NVFP4-v2",
+  "max_model_len": 786432,
+  "gpu_kv_tokens": 1765762,
+  "max_concurrency_at_786432": 2.25,
+  "cold_690000_token_prefill_s": 235.134,
+  "cache_hit_700000_token_prefill_s": 5.89,
+  "note": "The 690K request was cold; the 700K request shared 690K cached tokens and prefetched only the 10K suffix.",
+  "finish_reason": "length",
+  "completion_tokens": 1,
+  "concurrent_700k_cached_requests": 2,
+  "concurrent_700k_elapsed_s": [
+    1.92,
+    2.94
+  ],
+  "concurrent_700k_codes": [
+    200,
+    200
+  ]
+}

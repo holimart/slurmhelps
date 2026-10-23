@@ -279,6 +279,7 @@ the GGUF fork.
 - [2026-10-22 — Paged-KV engines and DeepSeek DeepInfer](experiments/2026-10-22-paged-kv-and-deepinfer.md) — where to get vLLM/SGLang, SM80 community forks, and which DeepSeek serving ideas transfer to GLM.
 - [2026-10-23 — Paged-KV on 2× A100 160 GB](experiments/2026-10-22-paged-kv-a100-attempt.md) — SM80 fork + NVFP4 v2 works after the dense-MLP quant ignore; 1.95M KV tokens, 300K fill 96 s, 256K TTFT 72 s. Raw: [cache CSV](experiments/data/2026-10-23-paged-cache-2xa100.csv) / [context CSV](experiments/data/2026-10-23-paged-context-2xa100.csv).
 - [2026-10-23 — Paged-KV on 2× H100 80 GB](experiments/2026-10-23-paged-kv-h100.md) — stock vLLM 0.32 + NVFP4 W4A16 Marlin; 1.79M KV tokens, 300K fill 77.5 s, 256K TTFT 56 s. Raw: [cache CSV](experiments/data/2026-10-23-paged-cache-2xh100.csv) / [context CSV](experiments/data/2026-10-23-paged-context-2xh100.csv).
+- [2026-10-23 — Serving gateway smoke](experiments/2026-10-23-serving-gateway-smoke.md) — real 2× A100 server through the controller, 700K context (235 s cold, 5.9 s cache hit), 10-check HTTP matrix, loopback gateway/auth/queue, and OpenCode; 280 mock/unit tests.
 
 ## Why this stack
 

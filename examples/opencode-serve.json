@@ -1,0 +1,18 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "slurmhelps": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "slurmhelps local endpoint",
+      "options": {
+        "baseURL": "http://127.0.0.1:8000/v1",
+        "apiKey": "{env:SLURMHELPS_API_KEY}"
+      },
+      "models": {
+        "glm53-reap50": {
+          "name": "GLM-5.3-Flash REAP50 (Slurm)"
+        }
+      }
+    }
+  }
+}

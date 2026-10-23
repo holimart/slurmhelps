@@ -6,3 +6,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# local serving state/logs
+.slurmhelps-serve/
+slurm-*.out

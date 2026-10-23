@@ -36,6 +36,8 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `lib/slurmhelps/config.py` | project config loader (`show`, `get KEY`, `shell`) |
 | `lib/slurmhelps/gpu_batch.py` | generic probe + sbatch/poll/fetch engine used by `hpc_run.sh` (stdlib only; was langywrap `scripts/hpchelpers`) |
 | `lib/slurmhelps/slurm_gpu.py`, `slurm_gpu_cli.py`, `bin/slurmhelps-jobs` | on-demand GPU jobs from `fleet.slurm.gpu` in lanes.json: `slurmhelps-jobs gpu plan\|submit\|status\|wait\|cancel` (was `langywrap jobs gpu`) |
+| `lib/slurmhelps/serving/` | preemptible model-serving controller: config/state/controller/tunnel, worker, mock OpenAI backend, gateway, CLI (`bin/slurmhelps-serve`) |
+| `llm/glm53-reap50/serve-server.sh` | A100 SM80 vLLM backend used by the serving worker; no probes |
 | `lib/common.sh` | cluster-side config loader (`sh_load`, `sh_fleet_env`): `site` + `fleet` sections as `SH_*` / `AGENTS_*` variables |
 | `fleet/ly` | login-side bridge into the fleet allocation (`status`, `ensure`, `up`, `down`, `renew`, `exec`, `lanes`, `start-lane`, `spill`, `store`, `workset`, `hot-reload`) |
 | `fleet/supervisor.sbatch` | the renewable allocation: daemon, store stage-in/snapshots, node-local or workset mode, final spill on every exit path |
@@ -157,13 +159,24 @@ mid-run). Keep the fleet on its own git checkout.
 
 ## Serving gateway
 
-The master design for a long-lived, preemptible model server is in
-[`docs/serving-gateway.md`](docs/serving-gateway.md). It covers the login-side
-controller/status/tunnel, the compute-side worker, OpenAI-compatible access,
-load-time state, continuous batching, host/RAM/Lustre cache tiers, gentle
-preemption defaults, and the verification matrix. It is a design, not an
-implemented production server; raw-KV Lustre spill is explicitly gated behind
-an engine-support/benchmark milestone.
+The master design and implementation status are in
+[`docs/serving-gateway.md`](docs/serving-gateway.md). P0/P1 are implemented:
+
+```bash
+../slurmhelps/bin/slurmhelps-serve up --yes
+../slurmhelps/bin/slurmhelps-serve status --json
+../slurmhelps/bin/slurmhelps-serve wait
+../slurmhelps/bin/slurmhelps-serve endpoint
+../slurmhelps/bin/slurmhelps-serve tunnel --local-port 8000
+../slurmhelps/bin/slurmhelps-serve gateway --listen-port 18001
+../slurmhelps/bin/slurmhelps-serve down
+```
+
+The real 2× A100 run, 700K context result, 10-check smoke matrix and OpenCode
+call are in
+[`llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md`](llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md).
+Raw-KV Lustre spill remains gated behind an engine support/benchmark milestone;
+the default is no raw-KV spill.
 
 ## Tests
 

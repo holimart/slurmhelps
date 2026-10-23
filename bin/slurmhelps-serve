@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Thin shim for the serving gateway CLI.  The real code is stdlib-only Python
+# in lib/slurmhelps/serving/.
+set -euo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/.." && pwd)
+export PYTHONPATH="$ROOT/lib${PYTHONPATH:+:$PYTHONPATH}"
+PY=${SLURMHELPS_PYTHON:-python3.12}
+command -v "$PY" >/dev/null 2>&1 || PY=python3
+exec "$PY" -m slurmhelps.serving.cli "$@"
