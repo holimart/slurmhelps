@@ -50,7 +50,7 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `env/env.sh`, `env/toolchain-mffsrv.sh` | user toolchain + caches profile; Troja's MPI/MKL toolchain profile |
 | `llm/glm53-reap50/` | install/serve/benchmark helper for pruned GLM-5.3-Flash (SGLang/vLLM/llama.cpp), with a batched-throughput client (`bench.py`) |
 | `tests/` | pytest suite (workstation tools; network-free) + `tests/run-cluster-tests.sh` (cluster suites, in Slurm) |
-| `docs/` | `config.md`, `gpu_batch.md`, `hpc_partial.md` |
+| `docs/` | `config.md`, `gpu_batch.md`, `hpc_partial.md`, `serving-gateway.md` |
 | `examples/slurmhelps.json` | whiteboxchallenge's config (Troja + LAN 1080 Ti) |
 | `examples/adgfem.bootstrap.json`, `examples/adgfem.worktrees` | ADGFEM's standalone disaster-recovery config + worktree snapshot |
 
@@ -154,6 +154,16 @@ filesystem as before. If both are enabled the workset wins and the supervisor lo
 `fleet.slurmhelps.path` at it (a submit from another project would replace the fleet's code
 mid-run). Keep the fleet on its own git checkout.
 <!-- END cluster-side -->
+
+## Serving gateway
+
+The master design for a long-lived, preemptible model server is in
+[`docs/serving-gateway.md`](docs/serving-gateway.md). It covers the login-side
+controller/status/tunnel, the compute-side worker, OpenAI-compatible access,
+load-time state, continuous batching, host/RAM/Lustre cache tiers, gentle
+preemption defaults, and the verification matrix. It is a design, not an
+implemented production server; raw-KV Lustre spill is explicitly gated behind
+an engine-support/benchmark milestone.
 
 ## Tests
 
