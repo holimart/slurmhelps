@@ -1,0 +1,5 @@
+context_tokens,concurrency,run,num_prompts,completed,failed,duration_s,output_tokens_per_s,total_tokens_per_s,prefill_tokens_per_s,decode_tokens_per_s,request_throughput,ttft_p50_ms,ttft_p99_ms,tpot_p50_ms,tpot_p99_ms,goodput_req_per_s,slo_attainment,cache_hit_rate,cache_regime
+16384,4,1,4,4,0,26.5106,19.313,2349.215,3921.709,25.208,0.151,10330.638,15646.431,120.581,159.144,0.0,0.0,0.0,cold
+262144,1,1,1,1,0,82.565,1.55,2989.791,3419.937,12.286,0.012,72142.85,72142.85,82.036,82.036,0.0,0.0,0.0,cold
+4096,8,1,8,8,0,18.3959,55.664,1731.36,3968.864,61.152,0.435,5004.585,7736.479,103.14,131.006,0.0,0.0,0.0,cold
+65536,2,1,2,2,0,43.0697,5.944,2874.83,3817.769,10.623,0.046,24501.999,32207.719,137.012,188.699,0.0,0.0,0.0,cold

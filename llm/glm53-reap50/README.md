@@ -277,7 +277,8 @@ the GGUF fork.
 - [2026-10-22 — Vulkan smoke on 2× L40S](experiments/2026-10-22-vulkan-smoke-2x48gb.md) — Vulkan loads the model but OOMs in compute buffers on 96 GB; 4× L40 or IQ3_M is required.
 - [2026-10-22 — Context sweep + guarded cache probe](experiments/2026-10-22-context-cache-runs.md) — 4K/16K/64K/256K prefill/decode, and cache hits at 100/200/300K with the ≤105K-new-prefill guard. Raw: [context CSV](experiments/data/2026-10-22-context-sweep-2x48gb.csv) / [cache CSV](experiments/data/2026-10-22-cache-probe-2x48gb.csv).
 - [2026-10-22 — Paged-KV engines and DeepSeek DeepInfer](experiments/2026-10-22-paged-kv-and-deepinfer.md) — where to get vLLM/SGLang, SM80 community forks, and which DeepSeek serving ideas transfer to GLM.
-- [2026-10-22 — Paged-KV attempt on 2× A100](experiments/2026-10-22-paged-kv-a100-attempt.md) — SM80 fork + NVFP4 v2 blocked by checkpoint key naming; no perf result.
+- [2026-10-23 — Paged-KV on 2× A100 160 GB](experiments/2026-10-22-paged-kv-a100-attempt.md) — SM80 fork + NVFP4 v2 works after the dense-MLP quant ignore; 1.95M KV tokens, 300K fill 96 s, 256K TTFT 72 s. Raw: [cache CSV](experiments/data/2026-10-23-paged-cache-2xa100.csv) / [context CSV](experiments/data/2026-10-23-paged-context-2xa100.csv).
+- [2026-10-23 — Paged-KV on 2× H100 80 GB](experiments/2026-10-23-paged-kv-h100.md) — stock vLLM 0.32 + NVFP4 W4A16 Marlin; 1.79M KV tokens, 300K fill 77.5 s, 256K TTFT 56 s. Raw: [cache CSV](experiments/data/2026-10-23-paged-cache-2xh100.csv) / [context CSV](experiments/data/2026-10-23-paged-context-2xh100.csv).
 
 ## Why this stack
 
