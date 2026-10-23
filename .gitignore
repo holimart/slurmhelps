@@ -10,3 +10,6 @@ __pycache__/
 # local serving state/logs
 .slurmhelps-serve/
 slurm-*.out
+
+# local OpenCode runtime log
+.opencode/
