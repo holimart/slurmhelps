@@ -11,18 +11,25 @@ They declare native context **262,144**; they are not 700K replacements.
 
 ## Serving through slurmhelps
 
-The controller accepts a project config and a backend command:
+The default entry point is `llm/qwen35/serve.sh` (122B, 2× A100):
 
 ```bash
 # 122B, two A100s
+llm/qwen35/serve.sh up --yes
+llm/qwen35/serve.sh status --json
+llm/qwen35/serve.sh wait --timeout 3600
+llm/qwen35/serve.sh endpoint
+llm/qwen35/serve.sh down
+```
+
+Equivalent explicit form:
+
+```bash
 slurmhelps-serve --config llm/qwen35/config-122b.json up --yes \
   --backend-command bash /work/ffa/holecem/slurmhelps-fleet/llm/qwen35/serve-122b.sh
+```
 
-slurmhelps-serve --config llm/qwen35/config-122b.json status --json
-slurmhelps-serve --config llm/qwen35/config-122b.json wait --timeout 3600
-slurmhelps-serve --config llm/qwen35/config-122b.json endpoint
-
-# 35B, one A100
+# 35B, one A100 (not the default)
 slurmhelps-serve --config llm/qwen35/config-35b.json up --yes \
   --backend-command bash /work/ffa/holecem/slurmhelps-fleet/llm/qwen35/serve-35b.sh
 ```

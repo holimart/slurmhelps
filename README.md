@@ -172,6 +172,14 @@ The master design and implementation status are in
 ../slurmhelps/bin/slurmhelps-serve down
 ```
 
+The Qwen A100 default is:
+```bash
+llm/qwen35/serve.sh up
+llm/qwen35/serve.sh status --json
+```
+It runs Qwen3.5-122B-A10B on 2× A100. Details:
+[`llm/qwen35/README.md`](llm/qwen35/README.md).
+
 The real 2× A100 run, 700K context result, 10-check smoke matrix and OpenCode
 call are in
 [`llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md`](llm/glm53-reap50/experiments/2026-10-23-serving-gateway-smoke.md).
