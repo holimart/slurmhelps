@@ -63,19 +63,19 @@ This runs:
 
 Outputs go to `experiments/data/<name>/`.
 
-## Current blocker (2026-10-24)
+## Status
 
-Stock vLLM 0.32 fails on the checkpoint's compressed NVFP4 scale format:
+Working on 2× BW6000 using the community Blackwell container. The 11 GiB SIF
+is built and reused; JIT/autotune caches are persistent under
+`{work_root}/cache/qwen38/qwen38-vllm-release-10152026`.
 
-```text
-w2_weight_scale.nvfp4_csf_exceptions
-```
+Measured: 2.64M KV tokens, 10.08× at 262K, 4K/C8 353.6 output tok/s, 256K
+TTFT 15.9 s, 200K cache-hit TTFT 0.61 s. Full results:
+[`experiments/2026-10-24-qwen38-bw-results.md`](experiments/2026-10-24-qwen38-bw-results.md).
 
-The model card requires the Blackwell community container
-`ghcr.io/local-inference-lab/vllm:release-10152026`. The Apptainer pull was
-started with `/work` cache/tmp, but extraction did not finish (killed after
-~37 min). No SIF and no speed numbers yet. See
-[`experiments/2026-10-24-qwen38-bw-setup.md`](experiments/2026-10-24-qwen38-bw-setup.md).
+`pull-container.sh` now exits without rebuilding when the SIF exists; set
+`QWEN38_FORCE_PULL=1` to rebuild. The first boot's 43-minute JIT/autotune is
+cached for subsequent starts.
 
 ## Scope
 

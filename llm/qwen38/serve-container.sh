@@ -22,9 +22,23 @@ MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-8192}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.90}
 KV_DTYPE=${KV_DTYPE:-fp8}
 MTP=${MTP:-1}
+# Persistent JIT/autotune/cache root. Changing the image or model revision
+# should use a new QWEN38_CACHE_KEY so stale kernels are not reused.
+CACHE_KEY=${QWEN38_CACHE_KEY:-qwen38-vllm-release-10152026}
+CACHE_ROOT=${QWEN38_CACHE_ROOT:-$WORK_ROOT/cache/qwen38/$CACHE_KEY}
 
 [ -f "$SIF" ] || { echo "qwen38 container: missing $SIF" >&2; exit 2; }
 [ -f "$MODEL/config.json" ] || { echo "qwen38 container: missing model $MODEL" >&2; exit 2; }
+for d in cache triton torchinductor cuda vllm b12x xdg hf; do
+  mkdir -p "$CACHE_ROOT/$d"
+done
+export TRITON_CACHE_DIR=/cache/triton
+export TORCHINDUCTOR_CACHE_DIR=/cache/torchinductor
+export CUDA_CACHE_PATH=/cache/cuda
+export VLLM_CACHE_ROOT=/cache/vllm
+export B12X_CACHE_DIR=/cache/b12x
+export XDG_CACHE_HOME=/cache/xdg
+export HF_HOME=/cache/hf
 
 # Environment from the model card's RTX PRO 6000 recipe (non-DGX path).
 export B12X_DENSE_SPLITK_TURBO=1
@@ -85,6 +99,7 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
 CMD=(apptainer exec --nv
   --bind "$WORK_ROOT:$WORK_ROOT"
+  --bind "$CACHE_ROOT:/cache"
   --env PYTHONUNBUFFERED=1
   --env HF_HUB_OFFLINE=1
   --env VLLM_PLE_CPU_OFFLOAD=1
@@ -129,5 +144,6 @@ fi
 
 printf '[qwen38-container] sif=%s model=%s tp=%s port=%s gpu_mem=%s\n' \
   "$SIF" "$MODEL" "$TP" "$PORT" "$GPU_MEM_UTIL"
+printf '[qwen38-container] persistent_cache=%s\n' "$CACHE_ROOT"
 printf '[qwen38-container] command:'; printf ' %q' "${CMD[@]}"; printf '\n'
 exec "${CMD[@]}"

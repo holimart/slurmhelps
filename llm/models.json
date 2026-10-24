@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "description": "Model catalogue for slurmhelps serving. Downstream consumers should resolve a model name here instead of hardcoding paths.",
+  "defaults": {
+    "a100": "qwen35-122b-a10b",
+    "blackwell": "qwen38-flash-next",
+    "glm_a100": "glm53-reap50"
+  },
+  "models": {
+    "qwen35-35b-a3b": {
+      "display_name": "Qwen3.5-35B-A3B",
+      "family": "qwen3.5",
+      "config": "llm/qwen35/config-35b.json",
+      "launcher": "llm/qwen35/serve.sh",
+      "backend": "llm/qwen35/serve-35b.sh",
+      "engine": "vllm-stock",
+      "gpus": "1x A100 80GB",
+      "context": 262144,
+      "endpoint": "http://127.0.0.1:8001/v1",
+      "opencode_provider": "slurmhelps-qwen",
+      "opencode_model": "qwen35-35b-a3b",
+      "status": "measured"
+    },
+    "qwen35-122b-a10b": {
+      "display_name": "Qwen3.5-122B-A10B",
+      "family": "qwen3.5",
+      "config": "llm/qwen35/config-122b.json",
+      "launcher": "llm/qwen35/serve.sh",
+      "backend": "llm/qwen35/serve-122b.sh",
+      "engine": "vllm-stock",
+      "gpus": "2x A100 80GB",
+      "context": 262144,
+      "endpoint": "http://127.0.0.1:8002/v1",
+      "opencode_provider": "slurmhelps-qwen",
+      "opencode_model": "qwen35-122b-a10b",
+      "status": "measured + OpenCode 4/4"
+    },
+    "qwen38-flash-next": {
+      "display_name": "Qwen3.8-Flash-Next (FP4-Local)",
+      "family": "qwen3.8",
+      "config": "llm/qwen38/config-bw.json",
+      "launcher": "llm/qwen38/serve.sh",
+      "backend": "llm/qwen38/serve-container.sh",
+      "engine": "vllm-blackwell-container",
+      "gpus": "2x BW6000 96GB",
+      "context": 262144,
+      "endpoint": "http://127.0.0.1:8010/v1",
+      "opencode_provider": "slurmhelps-qwen38",
+      "opencode_model": "qwen38-flash-next",
+      "container": "ghcr.io/local-inference-lab/vllm:release-10152026",
+      "sif": "{work_root}/images/qwen38-vllm.sif",
+      "cache_key": "qwen38-vllm-release-10152026",
+      "status": "measured",
+      "notes": "FP4/PLE checkpoint; requires community Blackwell vLLM container; 262K native, 1M only with YaRN."
+    },
+    "glm53-reap50": {
+      "display_name": "GLM-5.3-Flash REAP50",
+      "family": "glm5",
+      "config": "llm/glm53-reap50/config.env",
+      "launcher": "llm/glm53-reap50/serve.sh",
+      "backend": "llm/glm53-reap50/serve-server.sh",
+      "engine": "vllm-sm80",
+      "gpus": "2x A100 80GB",
+      "context": 786432,
+      "endpoint": "http://127.0.0.1:8000/v1",
+      "opencode_provider": "slurmhelps",
+      "opencode_model": "glm53-reap50",
+      "status": "measured"
+    }
+  }
+}

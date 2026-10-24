@@ -51,6 +51,8 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `maint/` | `install-shims.sh`, `land.sh`, `salvage.sh`, `wt-audit.sh`, `conflicts.sh`, `trash-bulky.sh`, `check-home.sh`, `fuse-bench.sh`, `toolchain-size.sh` |
 | `env/env.sh`, `env/toolchain-mffsrv.sh` | user toolchain + caches profile; Troja's MPI/MKL toolchain profile |
 | `llm/glm53-reap50/` | install/serve/benchmark helper for pruned GLM-5.3-Flash (SGLang/vLLM/llama.cpp), with a batched-throughput client (`bench.py`) |
+| `llm/models.json` | model catalogue: canonical names, configs, backends, GPU classes, endpoints, OpenCode provider/model, status |
+| `llm/qwen35/`, `llm/qwen38/` | Qwen3.5 A100 and Qwen3.8 Blackwell serving/measurement helpers |
 | `tests/` | pytest suite (workstation tools; network-free) + `tests/run-cluster-tests.sh` (cluster suites, in Slurm) |
 | `docs/` | `config.md`, `gpu_batch.md`, `hpc_partial.md`, `serving-gateway.md` |
 | `examples/slurmhelps.json` | whiteboxchallenge's config (Troja + LAN 1080 Ti) |
@@ -172,13 +174,27 @@ The master design and implementation status are in
 ../slurmhelps/bin/slurmhelps-serve down
 ```
 
-The Qwen A100 default is:
+The A100 default is:
 ```bash
 llm/qwen35/serve.sh up
 llm/qwen35/serve.sh status --json
 ```
-It runs Qwen3.5-122B-A10B on 2× A100. Details:
-[`llm/qwen35/README.md`](llm/qwen35/README.md).
+It runs Qwen3.5-122B-A10B on 2× A100.
+
+The Blackwell default is:
+```bash
+llm/qwen38/serve.sh up
+llm/qwen38/serve.sh status --json
+```
+It runs Qwen3.8-Flash-Next FP4 on 2× BW6000 96 GB. The 11 GiB SIF is reused
+rather than rebuilt; JIT/autotune caches are persistent under
+`{work_root}/cache/qwen38/`. Details:
+[`llm/README.md`](llm/README.md),
+[`llm/qwen35/README.md`](llm/qwen35/README.md) and
+[`llm/qwen38/README.md`](llm/qwen38/README.md).
+
+Downstream consumers can resolve models from
+[`llm/models.json`](llm/models.json) instead of hardcoding ports/paths.
 
 The real 2× A100 run, 700K context result, 10-check smoke matrix and OpenCode
 call are in

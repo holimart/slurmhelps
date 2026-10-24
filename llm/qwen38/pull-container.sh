@@ -12,6 +12,12 @@ CACHE="$SCRATCH/qwen38-apptainer-cache"
 TMP="$SCRATCH/qwen38-apptainer-tmp"
 TARGET="$SCRATCH/qwen38-vllm.sif"
 mkdir -p "$CACHE" "$TMP" "$(dirname "$SIF")"
+if [ -s "$SIF" ] && [ "${QWEN38_FORCE_PULL:-0}" != 1 ]; then
+  printf '[pull] existing SIF retained: %s\n' "$SIF"
+  ls -lh "$SIF"
+  sha256sum "$SIF"
+  exit 0
+fi
 cleanup() { rm -rf "$CACHE" "$TMP" "$TARGET"; }
 trap cleanup EXIT
 export APPTAINER_CACHEDIR="$CACHE"
