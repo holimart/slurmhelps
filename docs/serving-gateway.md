@@ -101,8 +101,9 @@ Non-negotiables:
 `slurmhelps serve up` runs or starts:
 
 - `serve-controller`: validates config, submits one Slurm job, writes
-  `state.json`, follows `squeue`/`sacct`, and restarts/recreates the tunnel
-  after requeue.
+  `state.json`, follows `squeue`/`sacct`, and reports the current endpoint or
+  an SSH `-L` hint. It does **not** keep an SSH tunnel or relay process alive;
+  those are separate operator-managed commands.
 - `serve-status`: reads `state.json` plus Slurm state; works even when the
   model HTTP server is not up yet.
 - `serve-relay`: optional loopback TCP relay on the login node for compute
@@ -498,6 +499,12 @@ export OPENAI_BASE_URL=http://127.0.0.1:8000/v1
 The third mode is the robust one when compute nodes are reachable only from
 the login node.
 
+`serve tunnel` execs `ssh -L` and stays in the foreground; `serve relay` stays
+in the foreground on the login node. Neither is started automatically by
+`serve up`, and neither is automatically recreated after a preemption. When
+the allocation moves to another node, stop the old helper and rerun it with
+the new node from `serve status --json`.
+
 ### Login-node relay
 
 ```bash
@@ -584,8 +591,9 @@ the requested time. On `SIGTERM`:
 3. allow in-flight requests a short drain;
 4. write `state=preempted` and any allowed snapshot;
 5. exit; Slurm requeues if `--requeue`;
-6. controller waits for the new allocation, updates `state=starting`, and
-   re-establishes the tunnel/relay.
+6. controller waits for the new allocation and updates `state=starting`; the
+   operator must recreate the SSH tunnel/relay if the compute node changed
+   (the controller does not manage those processes).
 
 If a hard guarantee is required, only an **admin-created advanced
 reservation** provides it; there is no user-facing `--no-preempt` flag on this

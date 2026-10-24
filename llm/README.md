@@ -77,6 +77,16 @@ Any OpenAI-compatible client can use the catalogue endpoint:
 export OPENAI_BASE_URL=http://127.0.0.1:8010/v1
 ```
 
+That loopback URL only works through an SSH `-L` tunnel. `serve.sh up` does
+not create one automatically. From a laptop, for example:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 8010:bw01:8010 "$USER@hpc-head.troja.mff.cuni.cz"
+```
+
+See [`qwen38/README.md`](qwen38/README.md#connect-from-outside).
+
 OpenCode provider examples:
 
 - [`examples/opencode-qwen35-122b.json`](../examples/opencode-qwen35-122b.json)

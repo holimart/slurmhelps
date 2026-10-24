@@ -35,15 +35,42 @@ The default job is:
 2× BW6000 96 GB
 TP2, 262144 context
 BF16 KV
-FFA-preempt, 16 CPUs, 300 GB, 2 h
+FFA-preempt, 8 CPUs, 220 GB, 12 h, nice=100
 prefix cache + chunked prefill
 qwen3 reasoning/tool parsers
 PLE CPU offload enabled
 ```
 
-The backend is `serve-server.sh`. It uses `modelopt` quantization and requires
-the newer Qwen4/PLE-capable vLLM environment; a plain older vLLM may fail to
-load the mixed FP4/PLE checkpoint.
+The backend is `serve-container.sh`. It runs the community Blackwell container
+`ghcr.io/local-inference-lab/vllm:release-10152026` from
+`$WORK_ROOT/images/qwen38-vllm.sif`; a stock vLLM cannot load the checkpoint's
+compressed NVFP4 scales.
+
+## Connect from outside
+
+The compute server has no public listener. `http://127.0.0.1:8010/v1` in the
+examples is the **client end of an SSH `-L` tunnel**, not a port that exists on
+a laptop by itself. `serve.sh up` submits/follows the Slurm job; it does not
+create or maintain an SSH tunnel.
+
+From a laptop, one hop through the pinned login node is enough:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 8010:bw01:8010 "$USER@hpc-head.troja.mff.cuni.cz"
+curl -s http://127.0.0.1:8010/v1/models
+```
+
+From the login node itself:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes -L 8010:bw01:8010 bw01
+```
+
+If the job is rescheduled onto a different compute node, recreate the tunnel
+using the new node from `serve.sh status --json` or `serve.sh endpoint`. A
+tunnel targets `host:port`, not a Slurm job ID, so an already open tunnel can
+survive a job restart only while the node and port stay the same.
 
 ## Measure
 
