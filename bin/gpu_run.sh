@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Run a command on a LAN GPU host (a workstation reached over ssh), configured by the calling
 # project's slurmhelps.json "lan_gpu" block: host, base (host dir), ssh_key, known_hosts, threads, gpu.
-# (whiteboxchallenge: martin@192.168.0.106, GTX 1080 Ti 11 GB, base /mnt/512ssd/whitebox-gpu.)
 #
 # Everything lives under <base> on the host:
 #   .venv/        Python + CUDA torch + numpy/scipy (set up by hand once)

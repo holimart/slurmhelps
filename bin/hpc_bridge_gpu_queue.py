@@ -3,7 +3,7 @@
 
 Configuration (cluster ssh/user/mirror/prefix/venv/threads, hpc_dir, queue.*) comes from the calling
 project's slurmhelps.json (lib/slurmhelps/config.py). Paths below use whiteboxchallenge's values
-(hpc_dir outputs/hpc, prefix wb-, mirror /work/ffa/holecem/whitebox, LAN host = the 1080 Ti).
+(hpc_dir outputs/hpc, prefix wb-, project mirror, LAN host = the 1080 Ti).
 
 Called by bin/hpc_chain.sh when chain.tsv has no pending line and outputs/hpc/bridge.enabled
 exists (the steward switches the bridge on/off with that file). One call = at most one job:
@@ -16,7 +16,7 @@ exists (the steward switches the bridge on/off with that file). One call = at mo
   4. refuse (release back to pending, with a `released` note) a job whose --sync paths are missing
      locally or whose rsync transfer to the mirror would exceed 2 GB; a job refused in the last 6 h
      is skipped when picking;
-  5. rsync scripts/ + the job's --sync paths (only those) to the mirror /work/ffa/holecem/whitebox
+  5. rsync scripts/ + the job's --sync paths (only those) to the project mirror
      (same relative paths, as gpu_run.sh does on the 1080 Ti host), then run it through
      bin/hpc_run.sh as wb-gq-<id> with the job's minutes (field minutes/limit_minutes, else 90);
      the command runs in the mirror root with the mirror .venv first on PATH; its exit code goes to

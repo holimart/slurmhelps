@@ -91,7 +91,7 @@ def slurm(tmp_path, monkeypatch):
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("FAKE_SLURM_DIR", str(state))
-    monkeypatch.setenv("USER", "holecem")
+    monkeypatch.setenv("USER", "testuser")
     root = tmp_path / "proj"
     root.mkdir()
     log_dir = tmp_path / "logs"

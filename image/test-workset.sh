@@ -221,7 +221,7 @@ in_ns() { from_other_process bash "$WS" --project "$PROJ" exec --no-fallback -- 
 
 python3 -m py_compile "$HERE/workset.py" || exit 1
 bash -n "$WS" "$HERE/toolchain.sh" || exit 1
-check "0: image code has no hard-coded site paths" bash -c "! grep -nE '/work/ffa|holecem|ffa-long|ffa-short' '$HERE/workset.py' '$HERE/workset.sh' '$HERE/toolchain.sh'"
+check "0: image code has no hard-coded site paths" bash -c "! grep -nE '/work/ffa|ffa-long|ffa-short' '$HERE/workset.py' '$HERE/workset.sh' '$HERE/toolchain.sh'"
 
 echo "== A: build =="
 ws build > "$H/run/build.out" 2>&1; rc=$?

@@ -4,6 +4,13 @@ Read by `lib/slurmhelps/config.py` from `<project>/slurmhelps.json` (or the `"sl
 `<project>/.langywrap/lanes.json`). Missing keys take the defaults in `config.py` (`DEFAULTS`).
 Keys starting with `_` are comments.
 
+Values never need to hardcode an account or a home path. `cluster.*`, `mount(s).*` and
+`lan_gpu.*` expand `${USER}`/`$USER`, `${HOME}`/`$HOME`, and (once `site.work_root` is
+known) `${WORK_ROOT}`/`$WORK_ROOT`; the `site` and `fleet` sections also accept
+`{user}`, `{home}` and `{work_root}`. Shell-syntax values (`cluster.env`, `site.mpi_env`,
+`bootstrap.env_local`) are left untouched. Public examples therefore use
+`${USER}@hpc.troja.mff.cuni.cz` and `${WORK_ROOT}/whitebox`.
+
 | Key | Used by | Meaning |
 |-----|---------|---------|
 | `cluster.ssh` | hpc_run, hpc_chain, bridge, hpc_minutes, mirror_mount, code_sync | `user@login-host` |
@@ -38,9 +45,9 @@ pass `allow_other`, refuse a non-empty mountpoint, and `"mode": "ro"` mounts rea
 
 ```json
 "mounts": {
-  "whitebox":     {"remote": "holecem@hpc.troja.mff.cuni.cz:/work/ffa/holecem/whitebox",
+  "whitebox":     {"remote": "${USER}@hpc.troja.mff.cuni.cz:${WORK_ROOT}/whitebox",
                    "mountpoint": "~/mnt/troja-whitebox", "mode": "rw"},
-  "workset-view": {"remote": "holecem@hpc-head.troja.mff.cuni.cz:/work/ffa/holecem/images/view",
+  "workset-view": {"remote": "${USER}@hpc-head.troja.mff.cuni.cz:${WORK_ROOT}/images/view",
                    "mountpoint": "~/mnt/troja-workset-view", "mode": "ro"}
 }
 ```

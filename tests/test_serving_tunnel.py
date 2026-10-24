@@ -53,7 +53,7 @@ def test_relay_defaults_to_loopback_and_rejects_wildcard():
     with pytest.raises(ValueError):
         Relay("127.0.0.1", 8000, listen_host="0.0.0.0")
     with pytest.raises(ValueError):
-        Relay("127.0.0.1", 8000, listen_host="192.168.1.5")
+        Relay("127.0.0.1", 8000, listen_host="203.0.113.5")
 
     public = Relay("127.0.0.1", 8000, listen_host="0.0.0.0", allow_public=True)
     assert public.listen_host == "0.0.0.0"

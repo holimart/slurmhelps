@@ -93,11 +93,11 @@ def test_tunnel_print_uses_loopback_and_jump_option(tmp_path):
         "endpoint": "http://127.0.0.1:8000/v1",
         "last_heartbeat": store.now_iso(),
     })
-    proc = run(["tunnel", "--local-port", "8123", "--via", "holecem@login", "--print"],
+    proc = run(["tunnel", "--local-port", "8123", "--via", "tester@login", "--print"],
                tmp_path / "state")
     assert proc.returncode == 0, proc.stderr
     assert "ssh" in proc.stdout
-    assert "-J holecem@login" in proc.stdout
+    assert "-J tester@login" in proc.stdout
     assert "8123:ampere02:8000" in proc.stdout
 
 

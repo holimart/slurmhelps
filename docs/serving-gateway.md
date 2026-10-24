@@ -680,7 +680,7 @@ mixed-output schedules.
 ### Reproduce the smoke
 
 ```bash
-cd /work/ffa/holecem/slurmhelps-fleet
+cd $WORK_ROOT/slurmhelps-fleet
 PYTHONPATH=lib python3 -m pytest -q
 
 # after the server is ready:

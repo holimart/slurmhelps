@@ -26,12 +26,12 @@ Equivalent explicit form:
 
 ```bash
 slurmhelps-serve --config llm/qwen35/config-122b.json up --yes \
-  --backend-command bash /work/ffa/holecem/slurmhelps-fleet/llm/qwen35/serve-122b.sh
+  --backend-command bash $WORK_ROOT/slurmhelps-fleet/llm/qwen35/serve-122b.sh
 ```
 
 # 35B, one A100 (not the default)
 slurmhelps-serve --config llm/qwen35/config-35b.json up --yes \
-  --backend-command bash /work/ffa/holecem/slurmhelps-fleet/llm/qwen35/serve-35b.sh
+  --backend-command bash $WORK_ROOT/slurmhelps-fleet/llm/qwen35/serve-35b.sh
 ```
 
 `nice=100` is the default; for a short smoke, lower it after submission:
@@ -80,7 +80,7 @@ CLI:
 Run:
 
 ```bash
-cd /work/ffa/holecem/slurmhelps-fleet
+cd $WORK_ROOT/slurmhelps-fleet
 python3 llm/qwen35/opencode_tasks.py \
   --model slurmhelps-qwen/qwen35-122b-a10b \
   --timeout 600 \

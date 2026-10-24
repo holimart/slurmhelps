@@ -6,10 +6,10 @@ backend before spending a 4×L40 allocation.
 ## Build
 
 - Vulkan SDK 1.4.363 (LunarG) extracted to
-  `/work/ffa/holecem/tools/vulkansdk/x86_64`; provides `glslc`.
+  `$WORK_ROOT/tools/vulkansdk/x86_64`; provides `glslc`.
 - `cmake -DGGML_CUDA=OFF -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release`.
 - `llama-server` built at
-  `/work/ffa/holecem/build/llama-vulkan/bin/llama-server`.
+  `$WORK_ROOT/build/llama-vulkan/bin/llama-server`.
 
 The fork implements `ggml_mhc_sinkhorn` in CPU and CUDA only. There is no
 Vulkan kernel for it, so the scheduler must fall back to the CPU for that
@@ -86,7 +86,7 @@ at 4K with IQ4_XS and works at 4K with IQ3_M.
 four cards. It remains to do when a 4× L40 node is free:
 
 ```bash
-LLAMA_SERVER=/work/ffa/holecem/build/llama-vulkan/bin/llama-server \
+LLAMA_SERVER=$WORK_ROOT/build/llama-vulkan/bin/llama-server \
 LLAMA_FA=off LLAMA_KV_TYPE=f16 CTX_TOTAL=8192 MAX_RUNNING=1 \
 sbatch -p gpu-ffa -w fuuk-13 --gres=gpu:4 --cpus-per-task=32 --mem=256G \
   --time=00:30:00 --wrap='bash .../vulkan-smoke.sh'

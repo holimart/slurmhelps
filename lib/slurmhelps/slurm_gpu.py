@@ -23,7 +23,7 @@ Config (``fleet.slurm.gpu`` in ``.langywrap/lanes.json``)::
      "max_project_jobs": 2,
      "count_job_names": ["langywrap-gpu-*", "<fleet-allocation-name>"],
      "env_setup": "module load cuda", "workdir": ".",
-     "log_dir": "/work/ffa/holecem/agents/state/gpu-jobs/myproject",
+     "log_dir": "{work_root}/agents/state/gpu-jobs/myproject",
      "ledger": ".langywrap/gpu-jobs.ndjson"}
 
 Machine and project rules live in lanes.json, not in code:

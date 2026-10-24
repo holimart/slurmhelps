@@ -247,7 +247,7 @@ for f in supervisor.sbatch ly start-lanes.sh label-lanes.sh lane-common.sh start
 done
 python3 -m py_compile "$HERE/nodelocal.py" "$HERE/store-sync.py" "$HERE/stray-check.py" || exit 1
 
-check "0: fleet code has no hard-coded site paths" bash -c "! grep -nE '/work/ffa|holecem|ffa-long|ffa-short' '$HERE'/*.sh '$HERE'/ly '$HERE'/supervisor.sbatch '$HERE'/*.py '$SHHOME/lib/common.sh' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v test-nodelocal.sh"
+check "0: fleet code has no hard-coded site paths" bash -c "! grep -nE '/work/ffa|ffa-long|ffa-short' '$HERE'/*.sh '$HERE'/ly '$HERE'/supervisor.sbatch '$HERE'/*.py '$SHHOME/lib/common.sh' | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' | grep -v test-nodelocal.sh"
 
 mk_toy_repo true
 write_config

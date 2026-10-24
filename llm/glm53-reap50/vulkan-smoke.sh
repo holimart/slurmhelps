@@ -21,7 +21,7 @@ log() { printf '[vulkan] %s\n' "$*"; }
 stop_server() { "$HELPER/serve.sh" --stop >/dev/null 2>&1 || true; }
 trap stop_server EXIT
 
-export LLAMA_SERVER=${LLAMA_SERVER:-/work/ffa/holecem/build/llama-vulkan/bin/llama-server}
+export LLAMA_SERVER=${LLAMA_SERVER:-${WORK_ROOT}/build/llama-vulkan/bin/llama-server}
 export LLAMA_FA=${LLAMA_FA:-off}
 export LLAMA_KV_TYPE=${LLAMA_KV_TYPE:-f16}
 export LLAMA_BATCH=${LLAMA_BATCH:-512}

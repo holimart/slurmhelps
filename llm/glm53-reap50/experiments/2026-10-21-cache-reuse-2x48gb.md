@@ -84,7 +84,7 @@ LLAMA_CUDA_HOME=/usr/local/cuda-12.5 ./submit.sh \
 
 # 160 GB H100 (sm_90 binary)
 LLAMA_CUDA_HOME=/usr/local/cuda-12.5 \
-LLAMA_SERVER=/work/ffa/holecem/build/llama-h100/bin/llama-server \
+LLAMA_SERVER=$WORK_ROOT/build/llama-h100/bin/llama-server \
 CACHE_KV_TYPE=q8_0 CACHE_BATCH=1024 CACHE_UBATCH=256 \
 ./submit.sh --node hopper01 --partition gpu-ffa-gpulab --account ffa \
   --gpus 2 --cpus 32 --mem 512G --time 02:00:00 \

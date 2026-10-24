@@ -29,6 +29,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -204,6 +205,28 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+def _subst(value: Any, work_root: str = "") -> Any:
+    """Expand ``{user}``, ``$USER``, ``{home}``, ``$HOME`` and (when known)
+    ``{work_root}``/``$WORK_ROOT`` in a config string.
+
+    Values that legitimately contain shell syntax (``cluster.env``,
+    ``site.mpi_env``, ``bootstrap.env_local``) are never passed through here.
+    """
+    if not isinstance(value, str):
+        return value
+    user = os.environ.get("USER", "")
+    home = os.environ.get("HOME", str(Path.home()))
+    out = (value.replace("${USER}", user).replace("${HOME}", home)
+                .replace("{user}", user).replace("{home}", home))
+    if work_root:
+        out = out.replace("${WORK_ROOT}", work_root).replace("{work_root}", work_root)
+    out = re.sub(r"\$USER\b", lambda _: user, out)
+    out = re.sub(r"\$HOME\b", lambda _: home, out)
+    if work_root:
+        out = re.sub(r"\$WORK_ROOT\b", lambda _: work_root, out)
+    return out
+
+
 def load(root: str | Path | None = None) -> dict[str, Any]:
     r = Path(root).resolve() if root is not None else project_root()
     path = r / CONFIG_NAME
@@ -213,6 +236,7 @@ def load(root: str | Path | None = None) -> dict[str, Any]:
     else:
         raw = _lanes_block(r) or {}
     cfg = _merge(DEFAULTS, {k: v for k, v in raw.items() if not k.startswith("_")})
+    _expand_placeholders(cfg)
     c = cfg["cluster"]
     if not c["user"] and "@" in c["ssh"]:
         c["user"] = c["ssh"].split("@", 1)[0]
@@ -222,32 +246,44 @@ def load(root: str | Path | None = None) -> dict[str, Any]:
     kh = cfg["lan_gpu"]["known_hosts"]
     if kh and not os.path.isabs(kh):
         cfg["lan_gpu"]["known_hosts"] = str(r / kh)
-    _expand_site(cfg)
     cfg["_root"] = str(r)
     cfg["_home"] = str(HOME)
     return cfg
 
 
-def _expand_site(cfg: dict) -> None:
-    """{work_root}/{user} placeholders in the site and fleet sections."""
-    site = cfg["site"]
-    user = os.environ.get("USER", "")
-    wr = str(site.get("work_root") or "").replace("{user}", user)
-    site["work_root"] = wr
+def _expand_placeholders(cfg: dict) -> None:
+    """Resolve placeholders in the site/fleet sections, then in the workstation-side keys.
 
-    def ex(v: Any) -> Any:
-        if not isinstance(v, str):
-            return v
-        v = v.replace("{user}", user)
-        if "{work_root}" in v:
-            return v.replace("{work_root}", wr) if wr else ""
-        return v
+    A public example config can therefore say ``${USER}@cluster`` and
+    ``${WORK_ROOT}/mirror`` instead of embedding a real account and path.
+    """
+    site = cfg["site"]
+    site["work_root"] = _subst(site.get("work_root") or "")
+    wr = site["work_root"]
 
     for sec in ("site", "fleet"):
         for k, v in list(cfg[sec].items()):
-            cfg[sec][k] = [ex(x) for x in v] if isinstance(v, list) else ex(v)
+            if isinstance(v, list):
+                cfg[sec][k] = [_subst(x, wr) for x in v]
+            else:
+                cfg[sec][k] = _subst(v, wr)
     if not cfg["fleet"]["partition"]:
         cfg["fleet"]["partition"] = site["partition_long"]
+
+    c = cfg["cluster"]
+    for k in ("ssh", "user", "account", "mirror", "remote_tmp", "slurmhelps_remote"):
+        c[k] = _subst(c[k], wr)
+    m = cfg["mount"]
+    for k in ("remote", "mountpoint"):
+        m[k] = _subst(m[k], wr)
+    for ent in (cfg.get("mounts") or {}).values():
+        if isinstance(ent, dict):
+            for k in ("remote", "mountpoint"):
+                if k in ent:
+                    ent[k] = _subst(ent[k], wr)
+    g = cfg["lan_gpu"]
+    for k in ("host", "base", "ssh_key", "known_hosts"):
+        g[k] = _subst(g[k], wr)
 
 
 def site_vars(cfg: dict) -> dict[str, str]:

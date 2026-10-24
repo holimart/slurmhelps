@@ -1,45 +1,45 @@
-# git worktree list --porcelain of /work/ffa/holecem/adgfem at 2026-10-12T20:39:30Z (checkouts.sh snapshot)
-worktree /work/ffa/holecem/adgfem
+# git worktree list --porcelain of $WORK_ROOT/adgfem at 2026-10-12T20:39:30Z (checkouts.sh snapshot)
+worktree $WORK_ROOT/adgfem
 HEAD e93ba28cf4b4119b47c9ffefa55c38490a75c27d
 branch refs/heads/mh-research
 
-worktree /work/ffa/holecem/adgfem-worktrees/workset
+worktree $WORK_ROOT/adgfem-worktrees/workset
 HEAD e93ba28cf4b4119b47c9ffefa55c38490a75c27d
 branch refs/heads/feat/workset-image
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/count-only
+worktree $WORK_ROOT/adgfem/.lane-worktrees/count-only
 HEAD f5276a44f5d762947bb77bab4f0c5e72bed5c1f4
 detached
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/counters
+worktree $WORK_ROOT/adgfem/.lane-worktrees/counters
 HEAD 9dc198ab82a13dcf0c14d217cccd949e7ec5c8cc
 branch refs/heads/lane/counters-cost-events
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/experiment-ledger
+worktree $WORK_ROOT/adgfem/.lane-worktrees/experiment-ledger
 HEAD cbd2d51e17803f75d534b6b875b80e5e728dc465
 branch refs/heads/lane/experiment-ledger
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/features
+worktree $WORK_ROOT/adgfem/.lane-worktrees/features
 HEAD 016ff2d101df39450664c53b94bd0a719fa9d77e
 branch refs/heads/lane/features
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/frozen-replay
+worktree $WORK_ROOT/adgfem/.lane-worktrees/frozen-replay
 HEAD 603311e92a0ad8e71d5ec6bd9dbdfee0fe8ff124
 branch refs/heads/lane/frozen-replay
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/harden
+worktree $WORK_ROOT/adgfem/.lane-worktrees/harden
 HEAD a8b43808adb83a198b5b024af5f59e4f3e9f86aa
 branch refs/heads/lane/harden
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/operation-burden
+worktree $WORK_ROOT/adgfem/.lane-worktrees/operation-burden
 HEAD 9d3bddd20f22cfbfb964ffa5072ba52aa4961040
 branch refs/heads/lane/operation-burden-w3-2026-10-11
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/problem-families
+worktree $WORK_ROOT/adgfem/.lane-worktrees/problem-families
 HEAD 4fccd044f0f6100d69bb8e1a28f38b7d53205df0
 branch refs/heads/lane/problem-families
 
-worktree /work/ffa/holecem/adgfem/.lane-worktrees/selector
+worktree $WORK_ROOT/adgfem/.lane-worktrees/selector
 HEAD 93fa6f858bf5ad8b4375a7f8e9042c034744ab8b
 branch refs/heads/lane/selector
 locked initializing

@@ -38,7 +38,7 @@ prefill wait and is therefore much lower at long context.
 | 512K | 1 | — | — | — | — | — | q8_0 `cudaMalloc` OOM during compute-buffer allocation; q4_0 + batch 512/128 is the configured retry |
 | 1M | 1 | ~378 (30% in 13 min) | — | — | — | — | server allocates with q4_0 KV + batch 512/128, but prefill needs ~43 min; timed out at 22.6 min |
 
-Raw run: `/work/ffa/holecem/runs/glm53-reap50/20261021T084616Z/`
+Raw run: `$WORK_ROOT/runs/glm53-reap50/20261021T084616Z/`
 (the 1M server-fit/timeout observation is in `ctx-1048576-c1/server.log`;
 the 512K q8 OOM is in `ctx-524288-c1/server.log`).
 
@@ -81,7 +81,7 @@ That 64K row is not a valid measurement and is omitted.
 ## Reproduction
 
 ```bash
-cd /work/ffa/holecem/slurmhelps-fleet/llm/glm53-reap50
+cd $WORK_ROOT/slurmhelps-fleet/llm/glm53-reap50
 
 # 4K, 16K, 256K in one hour; 64K C=1 and 512K q4 are separate points
 LLAMA_CUDA_HOME=/usr/local/cuda-12.5 ./submit.sh \

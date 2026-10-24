@@ -18,8 +18,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent  # the slurmhelps checkout
-CLUSTER_WB = "/work/ffa/holecem/whitebox"  # examples/slurmhelps.json cluster.mirror
-CLUSTER_SH = "/work/ffa/holecem/slurmhelps"  # examples/slurmhelps.json cluster.slurmhelps_remote
+TEST_USER = os.environ.get("USER") or "testuser"
+CLUSTER_WB = f"/work/ffa/{TEST_USER}/whitebox"  # examples/slurmhelps.json cluster.mirror
+CLUSTER_SH = f"/work/ffa/{TEST_USER}/slurmhelps"  # examples/slurmhelps.json cluster.slurmhelps_remote
 
 
 @pytest.fixture
@@ -56,7 +57,8 @@ def dry_run(s, chain):
     out = subprocess.run(
         ["bash", str(s["sh"] / "bin" / "hpc_chain.sh"), "--dry-run", str(chain)],
         cwd=s["repo"], capture_output=True, text=True, check=True,
-        env={k: v for k, v in os.environ.items() if k != "SLURMHELPS_PROJECT"},
+        env={**{k: v for k, v in os.environ.items() if k != "SLURMHELPS_PROJECT"},
+             "USER": TEST_USER},
     ).stdout
     rows = {}
     for line in out.splitlines():
@@ -69,7 +71,7 @@ def dry_run(s, chain):
 def run_through_hpc_run(s, job, mins, run_cmd, env_extra=None):
     """hpc_run.sh (no --yes: gpu_batch dry path) -> captured --run-cmd -> local execution."""
     env = dict({k: v for k, v in os.environ.items() if k != "SLURMHELPS_PROJECT"}, PATH=f"{s['bin']}{os.pathsep}{os.environ['PATH']}",
-               WB_TEST_CAPTURE=str(s["capture"]), SLURM_JOB_ID="t1")
+               WB_TEST_CAPTURE=str(s["capture"]), SLURM_JOB_ID="t1", USER=TEST_USER)
     subprocess.run(["bash", str(s["sh"] / "bin" / "hpc_run.sh"), job, mins, run_cmd],
                    cwd=s["repo"], env=env, capture_output=True, text=True, check=True)
     argv = s["capture"].read_bytes().split(b"\0")

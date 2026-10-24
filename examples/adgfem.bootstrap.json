@@ -15,7 +15,7 @@
   "bootstrap": {
     "project_name": "adgfem",
     "origin": "git@github.com:holimart/adgfem.git",
-    "upstream": "git@gitlab.mff.cuni.cz:dolejsi/adgfem.git",
+    "upstream": "git@gitlab.example.org:upstream/adgfem.git",
     "branch": "mh-research",
     "lane_worktree_dir": ".lane-worktrees",
     "worktrees_file": "{slurmhelps}/examples/adgfem.worktrees",

@@ -1,6 +1,6 @@
 {
   "generated_at": "2026-10-22T07:39:43.627928+00:00",
-  "result_dir": "/work/ffa/holecem/runs/glm53-reap50/20261022T071702Z",
+  "result_dir": "$WORK_ROOT/runs/glm53-reap50/20261022T071702Z",
   "rows": [
     {
       "context": 4096,
