@@ -1,0 +1,29 @@
+{
+  "serving": {
+    "model": "qwen38-flash-next",
+    "engine": "vllm-blackwell",
+    "gpus": 2,
+    "gpu_type": "BW6000",
+    "partition": "ffa-preempt",
+    "account": "ffa",
+    "cpus": 8,
+    "mem": "220G",
+    "time": "02:00:00",
+    "requeue": true,
+    "nice": 100,
+    "exclusive": false,
+    "max_model_len": 262144,
+    "max_num_seqs": 32,
+    "max_num_batched_tokens": 8192,
+    "gpu_memory_utilization": 0.90,
+    "kv_cache_dtype": "bfloat16",
+    "block_size": 128,
+    "host_kv_ram_gib": 0,
+    "queue_limit": 64,
+    "coalesce_ms": 0,
+    "port": 8010,
+    "api": {"bind": "127.0.0.1", "key_env": "SLURMHELPS_API_KEY"},
+    "tunnel": {"relay_port": 18010},
+    "spill": {"enabled": false, "idle_seconds": 600, "mode": "state-only"}
+  }
+}
