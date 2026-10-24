@@ -393,6 +393,7 @@ def build_sbatch_script(
     run_cmd: str = "",
     workdir: str = "",
     results_name: str = "results.jsonl",
+    nice: int | None = None,
 ) -> str:
     """Render the sbatch script (``--output`` -> ``<remote_dir>/slurm-%j.out``).
 
@@ -418,6 +419,12 @@ def build_sbatch_script(
         lines.insert(3, f"#SBATCH --nodelist={nodelist}")
     if exclude:
         lines.insert(4, f"#SBATCH --exclude={','.join(exclude)}")
+    if nice is not None:
+        # Positive only: a lower priority for our jobs, never a boost (unprivileged users can
+        # only raise niceness anyway).
+        if int(nice) < 0:
+            raise ValueError("nice must be >= 0")
+        lines.append(f"#SBATCH --nice={int(nice)}")
     lines.append("")
     lines.append("set -euo pipefail")
     lines.append(f"cd {shlex.quote(remote_dir)}")
@@ -460,6 +467,7 @@ def submit_run(
     gpu_rank: Mapping[str, int] | None = None,
     partition_rank: Mapping[str, int] | None = None,
     allowed_partition: Sequence[str] = (),
+    nice: int | None = None,
 ) -> str:
     """Submit one GPU batch job and return the local results path.
 
@@ -498,6 +506,7 @@ def submit_run(
         partition=sel_partition,
         nodelist=nodelist,
         exclude=exclude,
+        nice=nice,
         setup_cmd=setup_cmd,
         run_cmd=run_cmd,
         workdir=workdir,
@@ -615,6 +624,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--results-name", default="results.jsonl")
     run.add_argument("--results-local", default=None)
     run.add_argument("--poll-timeout", type=int, default=3600)
+    run.add_argument("--nice", type=int, default=None, help="#SBATCH --nice (>= 0; lower priority)")
     run.add_argument("--yes", action="store_true", help="actually submit (else dry-run)")
     run.add_argument("--dry-run", action="store_true", help="force dry-run")
     _add_selection_flags(run)
@@ -666,6 +676,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         gpu_rank=dict(args.gpu_rank),
         partition_rank=dict(args.partition_rank),
         allowed_partition=args.allowed_partition,
+        nice=args.nice,
     )
     print(results)
     return 0

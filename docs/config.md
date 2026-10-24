@@ -23,6 +23,7 @@ known) `${WORK_ROOT}`/`$WORK_ROOT`; the `site` and `fleet` sections also accept
 | `cluster.job_prefix` | all cluster tools | our job names start with it (whitebox: `wb-`) |
 | `cluster.max_jobs` | hpc_run, hpc_chain | at most this many of our jobs queued/running |
 | `cluster.gres` / `cpus` / `mem` | hpc_run | per-job caps |
+| `cluster.nice` | hpc_run | `#SBATCH --nice=N` on every job (N >= 0, lower priority); default unset |
 | `cluster.threads` | hpc_run, bridge | OMP/MKL threads |
 | `cluster.env` | hpc_run | extra `KEY=VALUE` exported in the job setup (e.g. a CuPy pool limit) |
 | `cluster.allowed_partitions`, `partition_rank` | hpc_run | allow-list and cost order |

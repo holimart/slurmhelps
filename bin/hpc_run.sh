@@ -66,6 +66,7 @@ if [ -n "$SH_EXCLUDE_NODES" ]; then args+=(--exclude "$SH_EXCLUDE_NODES"); fi
 for g in $SH_EXCLUDE_GPUS; do args+=(--exclude-gpu "$g"); done
 for r in $SH_GPU_RANK; do args+=(--gpu-rank "$r"); done
 for r in $SH_PARTITION_RANK; do args+=(--partition-rank "$r"); done
+if [ -n "${SH_NICE:-}" ]; then args+=(--nice "$SH_NICE"); fi
 exec python3 "$SLURMHELPS_HOME/lib/slurmhelps/gpu_batch.py" run \
   --ssh "$SSH" --account "$SH_ACCOUNT" \
   --workdir "$MIRROR" --remote-tmp "$SH_REMOTE_TMP" \

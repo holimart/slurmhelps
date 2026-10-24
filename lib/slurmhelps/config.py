@@ -52,6 +52,7 @@ DEFAULTS: dict[str, Any] = {
         "venv": ".venv",  # mirror-relative venv; slurmhelps.pth is installed into it
         "job_prefix": "sh-",  # our job names start with this
         "max_jobs": 1,  # at most this many of our jobs queued or running
+        "nice": None,  # #SBATCH --nice for every job (>= 0), None = unset
         "sync_always": [],  # project-relative paths hpc_chain.sh ships with EVERY job (e.g. shared parent arms)
         "gres": "gpu:1",
         "cpus": 4,
@@ -380,6 +381,7 @@ def shell_vars(cfg: dict) -> dict[str, str]:
         "SH_EXCLUDE_GPUS": words(c["exclude_gpus"]),
         "SH_GPU_RANK": ranks(c["gpu_rank"]),
         "SH_POLL_SLACK": str(c["poll_slack_s"]),
+        "SH_NICE": "" if c.get("nice") is None else str(int(c["nice"])),
         "SH_MOUNT_REMOTE": cfg["mount"]["remote"],
         "SH_MOUNT_POINT": os.path.expanduser(cfg["mount"]["mountpoint"]),
         "SH_GPU_HOST": g["host"],
