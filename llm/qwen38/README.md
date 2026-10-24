@@ -11,7 +11,7 @@ does not leave useful KV headroom on 2×96 GB. The 4-bit local FP4 checkpoint is
 
 ```text
 nvidia/Qwen3.8-Flash-Next-FP4-Local
-/work/ffa/holecem/models/qwen38-flash-next-fp4-local
+$WORK_ROOT/models/qwen38-flash-next-fp4-local
 ```
 
 The model has a 125B main model, 51B N-gram/PLE table, and 4B MTP head; only
@@ -20,7 +20,7 @@ The model has a 125B main model, 51B N-gram/PLE table, and 4B MTP head; only
 ## Serve
 
 ```bash
-cd /work/ffa/holecem/slurmhelps-fleet
+cd $WORK_ROOT/slurmhelps-fleet
 
 llm/qwen38/serve.sh up
 llm/qwen38/serve.sh status --json
@@ -72,6 +72,9 @@ is built and reused; JIT/autotune caches are persistent under
 Measured: 2.64M KV tokens, 10.08× at 262K, 4K/C8 353.6 output tok/s, 256K
 TTFT 15.9 s, 200K cache-hit TTFT 0.61 s. Full results:
 [`experiments/2026-10-24-qwen38-bw-results.md`](experiments/2026-10-24-qwen38-bw-results.md).
+
+OpenCode passed **4/4** local agent tasks against this endpoint:
+[`experiments/2026-10-24-opencode-qwen38-flash-next.md`](experiments/2026-10-24-opencode-qwen38-flash-next.md).
 
 `pull-container.sh` now exits without rebuilding when the SIF exists; set
 `QWEN38_FORCE_PULL=1` to rebuild. The first boot's 43-minute JIT/autotune is

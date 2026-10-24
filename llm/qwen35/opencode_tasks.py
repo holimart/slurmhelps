@@ -121,7 +121,7 @@ def run_task(opencode: str, model: str, task: str, prompt: str, root: Path,
              timeout: int) -> dict:
     env = dict(os.environ, PWD=str(root), OLDPWD=str(root))
     cmd = [
-        opencode, "run", "--standalone", "--format", "json", "--auto",
+        opencode, "run", "--format", "json", "--auto",
         "--model", model, prompt,
     ]
     started = time.perf_counter()
@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--opencode", default=shutil.which("opencode") or "opencode")
     parser.add_argument("--model", required=True)
     parser.add_argument("--timeout", type=int, default=600)
-    parser.add_argument("--work-root", default="/work/ffa/holecem/opencode-bench")
+    parser.add_argument("--work-root",
+                        default=str(Path(os.environ.get("WORK_ROOT") or Path.home()) / "opencode-bench"))
     parser.add_argument("--output", default="")
     parser.add_argument("--only", default="", help="comma-separated task names")
     args = parser.parse_args(argv)

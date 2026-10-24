@@ -50,7 +50,7 @@
       "container": "ghcr.io/local-inference-lab/vllm:release-10152026",
       "sif": "{work_root}/images/qwen38-vllm.sif",
       "cache_key": "qwen38-vllm-release-10152026",
-      "status": "measured",
+      "status": "measured + OpenCode 4/4",
       "notes": "FP4/PLE checkpoint; requires community Blackwell vLLM container; 262K native, 1M only with YaRN."
     },
     "glm53-reap50": {

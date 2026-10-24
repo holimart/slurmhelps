@@ -44,7 +44,6 @@ def test_opencode_calls_mock_through_openai_compatible_provider(tmp_path):
             [
                 OPENCODE,
                 "run",
-                "--standalone",
                 "--format",
                 "json",
                 "--model",
