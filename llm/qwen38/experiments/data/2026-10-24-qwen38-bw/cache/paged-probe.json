@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-10-24T14:25:33Z",
+  "engine": "paged-openai",
+  "base_url": "http://bw01:8010",
+  "model": "qwen38-flash-next",
+  "prefixes": [
+    50000,
+    100000,
+    200000
+  ],
+  "suffix_tokens": 128,
+  "osl": 128,
+  "miss": "inferred; no cold miss requests",
+  "rows": [
+    {
+      "prefix_tokens": 50000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 3.0582,
+      "expected_new_tokens": 50000,
+      "incremental_prefill_tok_s": 16349.54,
+      "cumulative_fill_s": 3.0582,
+      "hit_ttft_s": 0.4018,
+      "hit_reuse_ratio": 7.61,
+      "hit_suffix_prefill_tok_s": 318.57,
+      "hit_decode_tok_s": 344.45,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.0754,
+      "repeat_reuse_ratio": 5.33,
+      "inferred_miss_ttft_s": 3.46,
+      "prefix_cache": {
+        "vllm:prefix_cache_hits_total": 107636.0,
+        "hits": 104623.0,
+        "queries": 156999.0,
+        "hit_rate": 0.6663927795718444
+      }
+    },
+    {
+      "prefix_tokens": 100000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 3.2209,
+      "expected_new_tokens": 50000,
+      "incremental_prefill_tok_s": 15523.54,
+      "cumulative_fill_s": 6.2791,
+      "hit_ttft_s": 0.4683,
+      "hit_reuse_ratio": 6.88,
+      "hit_suffix_prefill_tok_s": 273.3,
+      "hit_decode_tok_s": 352.38,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.123,
+      "repeat_reuse_ratio": 3.81,
+      "inferred_miss_ttft_s": 6.7474,
+      "prefix_cache": {
+        "vllm:prefix_cache_hits_total": 369136.0,
+        "hits": 261500.0,
+        "queries": 313944.0,
+        "hit_rate": 0.832951099559157
+      }
+    },
+    {
+      "prefix_tokens": 200000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 7.3844,
+      "expected_new_tokens": 100000,
+      "incremental_prefill_tok_s": 13542.08,
+      "cumulative_fill_s": 13.6635,
+      "hit_ttft_s": 0.6122,
+      "hit_reuse_ratio": 12.06,
+      "hit_suffix_prefill_tok_s": 209.1,
+      "hit_decode_tok_s": 397.46,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.1998,
+      "repeat_reuse_ratio": 3.06,
+      "inferred_miss_ttft_s": 14.2757,
+      "prefix_cache": {
+        "vllm:prefix_cache_hits_total": 892435.0,
+        "hits": 523299.0,
+        "queries": 628170.0,
+        "hit_rate": 0.8330531544008788
+      }
+    }
+  ]
+}

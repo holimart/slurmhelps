@@ -1,0 +1,2 @@
+concurrency,run,num_prompts,completed,failed,duration_s,output_tokens_per_s,total_tokens_per_s,prefill_tokens_per_s,decode_tokens_per_s,request_throughput,ttft_p50_ms,ttft_p99_ms,tpot_p50_ms,tpot_p99_ms,goodput_req_per_s,slo_attainment,cache_hit_rate,cache_regime
+2,1,2,2,0,7.5396,33.954,16422.309,17348.401,77.098,0.265,5630.196,7092.542,14.698,25.916,0.0,0.0,0.0,cold

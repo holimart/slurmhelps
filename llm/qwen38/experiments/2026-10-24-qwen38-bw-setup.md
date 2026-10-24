@@ -70,7 +70,8 @@ container measurement was produced.
 
 ## Measurement status
 
-No Qwen3.8-Flash-Next speed/context numbers are claimed or fabricated.
+Completed. See the results note. In short: 2.64M KV tokens, 10.08× at 262K,
+4K C8 353.6 output tok/s, 256K TTFT 15.9 s, 200K cache-hit TTFT 0.61 s.
 
 The measurement plan is ready:
 
