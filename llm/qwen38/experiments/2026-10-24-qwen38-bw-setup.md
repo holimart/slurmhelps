@@ -17,7 +17,7 @@ llm/qwen38/README.md            usage
 Model downloaded to:
 
 ```text
-/work/ffa/holecem/models/qwen38-flash-next-fp4-local   (~96 GiB)
+$WORK_ROOT/models/qwen38-flash-next-fp4-local   (~96 GiB)
 ```
 
 ## What worked
