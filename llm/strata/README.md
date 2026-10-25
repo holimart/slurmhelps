@@ -191,11 +191,15 @@ sbatch --nice=100 --nodelist=uk-g6-07 --time=11:00:00 \
 ```
 
 Variants: `control` (baseline recipe, one 1024/C1 cell as a host/engine
-variance check), `nospec` (`--spec` removed), `spec_pure` (`--spec 4
+variance check), `nospec` (`--spec` removed — the engine refuses on a native IQ
+pack, so it records `launch-fail` with `it needs --spec T (T >= 2)`),
+`mtpoff` (`--mtp off`, the workable no-drafts arm), `spec_pure` (`--spec 4
 --spec-min-p 0`), `kvfp16` (`--kv fp16`), `kvres16k`/`kvres64k`
 (`--kv-resident` 16384/65536), `batch8` (`--parallel 8` plus C=8 cells),
 `groups1` (`--batch-mtp --batch-groups 1`), `mtpserial`
-(`STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1`). `kvbf16` and
+(`STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1`), `vramreserve`
+(`--vram-reserve-mib 1024`, since the auto expert cache otherwise leaves ~430
+MiB free and the engine warns about #2065 paging). `kvbf16` and
 `expert_cache_max` are recorded as `skipped-flag`: engine 0.1.50 has no
 `--kv bf16` (only fp16/int8/q4_0/k8v4) and `--expert-cache` has no `max` mode.
 

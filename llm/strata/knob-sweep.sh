@@ -63,7 +63,12 @@
 # Variant definitions (one knob each; baseline otherwise):
 #   control       baseline recipe, ONE cell (1024, C1): host/engine variance
 #                 check against the stored 141.69 tok/s (iq3s) / 140.88 (coder)
-#   nospec        --spec removed (the MTP drafter still loads, no drafts)
+#   nospec        --spec removed: IMPOSSIBLE on a native IQ pack (the engine
+#                 refuses to start: it needs --spec T (T >= 2)); recorded as
+#                 launch-fail with the real error
+#   mtpoff        `strata launch --mtp off` (no draft layer at all; --spec 4
+#                 stays in the config because the native pack requires it) —
+#                 the workable "no drafts" arm
 #   spec_pure     --spec 4 --spec-min-p 0 (extend every verify window)
 #   kvbf16        SKIPPED: engine 0.1.50 only has --kv fp16|int8|q4_0|k8v4;
 #                 `--kv bf16` answers "--kv must be fp16, int8, q4_0 or k8v4"
@@ -76,6 +81,8 @@
 #   mtpserial     STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1 (what the docs
 #                 call serial MTP windows; the SERIAL var alone does NOT enable
 #                 --batch-mtp, so both are needed)
+#   vramreserve   --vram-reserve-mib 1024: the auto expert cache otherwise
+#                 leaves ~430 MiB free and the engine warns about #2065 paging
 #   expert_cache_max  SKIPPED: --expert-cache takes N or auto; "max" is not a
 #                 mode (atoi("max") = 0 = cache off) and auto is the baseline
 #
@@ -125,7 +132,7 @@ FORCE=0
 SELF_TEST=0
 CONTROL_CTX=1024
 
-ALL_VARIANTS="control nospec spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial expert_cache_max"
+ALL_VARIANTS="control nospec mtpoff spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial vramreserve expert_cache_max"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -189,7 +196,7 @@ fi
 
 variant_known() {
   case "$1" in
-    control|nospec|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|expert_cache_max) return 0 ;;
+    control|nospec|mtpoff|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|vramreserve|expert_cache_max) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -219,9 +226,18 @@ variant_set_flags() {
     kvres16k) printf '%s' "--set kv-resident=16384" ;;
     kvres64k) printf '%s' "--set kv-resident=65536" ;;
     groups1) printf '%s' "--set batch-mtp=1 --set batch-groups=1" ;;
+    vramreserve) printf '%s' "--set vram-reserve-mib=1024" ;;
     *) printf '' ;;
   esac
 }
+variant_launch_flags() {
+  # launch-level flags (not engine --set): only --mtp off needs one
+  case "$1" in
+    mtpoff) printf '%s' "--mtp off" ;;
+    *) printf '' ;;
+  esac
+}
+variant_all_flags() { printf '%s %s' "$(variant_launch_flags "$1")" "$(variant_set_flags "$1")" | sed 's/^ *//;s/ *$//'; }
 variant_env_pairs() {
   case "$1" in
     mtpserial) printf '%s' "STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1" ;;
@@ -300,13 +316,25 @@ csv_row() { # file variant ctx c decode agg t50 t95 status error
     "$9" "$(csv_escape "${10:-}")" >> "$1"
 }
 
-# knobs.csv is derived: header + every variant's summary.csv in variant order.
+# knobs.csv is derived: header + every variant's summary.csv, in the canonical
+# ALL_VARIANTS order (so a --resume job that runs two new variants keeps the
+# rows from the earlier job) plus any unknown dirs last.
 rebuild_knobs_csv() {
-  local v f tmp=$OUTDIR/knobs.csv.tmp
+  local v f tmp=$OUTDIR/knobs.csv.tmp d seen=" "
   [ -d "$OUTDIR/$MODEL" ] || return 0
   printf '%s\n' "$CSV_HEADER" > "$tmp"
-  for v in $PROCESSED_ORDER; do
+  for v in $ALL_VARIANTS; do
     f=$OUTDIR/$MODEL/$v/summary.csv
+    [ -f "$f" ] || continue
+    grep -v '^variant,' "$f" >> "$tmp" || true
+    seen="$seen$v "
+  done
+  for d in "$OUTDIR/$MODEL"/*/; do
+    [ -d "$d" ] || continue
+    v=$(basename "$d")
+    case "$v" in *.bak-*) continue ;; esac
+    case "$seen" in *" $v "*) continue ;; esac
+    f=$d/summary.csv
     [ -f "$f" ] || continue
     grep -v '^variant,' "$f" >> "$tmp" || true
   done
@@ -493,6 +521,12 @@ launch_variant_server() { # variant port datadir
     # shellcheck disable=SC2206  # intentional word split: "--set k=v --set k=v"
     setargs=($flags)
   fi
+  local -a lflags=()
+  local lf; lf=$(variant_launch_flags "$variant")
+  if [ -n "$lf" ]; then
+    # shellcheck disable=SC2206
+    lflags=($lf)
+  fi
   local -a envs=()
   local ep; ep=$(variant_env_pairs "$variant")
   if [ -n "$ep" ]; then
@@ -503,7 +537,7 @@ launch_variant_server() { # variant port datadir
   local -a gpu_args=()
   [ -n "$GPU_LIST" ] && gpu_args=(--gpu "$GPU_LIST")
   mkdir -p "$OUTDIR/$MODEL/$variant"
-  log "launch variant=$variant: strata launch --model-path $CUR_DIR --context $MAX_CONTEXT --parallel $par${GPU_LIST:+ --gpu $GPU_LIST} --kv int8 --vision off --access local --port $port --no-api-key --data-dir $datadir ${flags} ${ep} (log $logf)"
+  log "launch variant=$variant: strata launch --model-path $CUR_DIR --context $MAX_CONTEXT --parallel $par${GPU_LIST:+ --gpu $GPU_LIST} --kv int8 --vision off --access local --port $port --no-api-key --data-dir $datadir ${lf} ${flags} ${ep} (log $logf)"
   if ! "$STRATA_ROOT/bin/strata" launch \
       --model-path "$CUR_DIR" \
       --context "$MAX_CONTEXT" \
@@ -511,6 +545,7 @@ launch_variant_server() { # variant port datadir
       ${gpu_args[@]+"${gpu_args[@]}"} \
       --kv int8 --vision off --access local --port "$port" --no-api-key \
       --data-dir "$datadir" --yes --no-tui --restart \
+      ${lflags[@]+"${lflags[@]}"} \
       ${setargs[@]+"${setargs[@]}"} >"$logf" 2>&1; then
     log "launch failed for variant=$variant; tail of $logf:"
     tail -n 20 "$logf" || true
@@ -639,13 +674,13 @@ run_variant() { # variant
     for ctx in $ctxs; do for c in $batches; do
       csv_row "$csv" "$v" "$ctx" "$c" "" "" "" "" "skipped-flag" "$reason"
     done; done
-    csv_row_variant "$v" "skipped-flag" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "$reason"
+    csv_row_variant "$v" "skipped-flag" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "$reason"
     return 0
   fi
 
   if [ "$RESUME" = 1 ] && variant_complete "$v"; then
     log "variant=$v already complete — resume skips it"
-    csv_row_variant "$v" "skipped-done" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "complete summary.csv reused"
+    csv_row_variant "$v" "skipped-done" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "complete summary.csv reused"
     return 0
   fi
   if [ -f "$csv" ] || [ -f "$cells" ]; then
@@ -660,7 +695,7 @@ run_variant() { # variant
     for ctx in $ctxs; do for c in $batches; do
       csv_row "$csv" "$v" "$ctx" "$c" "" "" "" "" "skipped-budget" "wall budget ${BUDGET_MIN}min exhausted before this variant"
     done; done
-    csv_row_variant "$v" "skipped-budget" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "budget exhausted"
+    csv_row_variant "$v" "skipped-budget" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "budget exhausted"
     return 0
   fi
 
@@ -679,7 +714,7 @@ run_variant() { # variant
     for ctx in $ctxs; do for c in $batches; do
       csv_row "$csv" "$v" "$ctx" "$c" "" "" "" "" "launch-fail" "shared DATA_DIR $DATA_DIR incomplete (mtp/rt missing)"
     done; done
-    csv_row_variant "$v" "launch-fail" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "shared data dir incomplete"
+    csv_row_variant "$v" "launch-fail" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "shared data dir incomplete"
     return 0
   fi
 
@@ -691,7 +726,7 @@ run_variant() { # variant
     for ctx in $ctxs; do for c in $batches; do
       csv_row "$csv" "$v" "$ctx" "$c" "" "" "" "" "launch-fail" "$lasterr"
     done; done
-    csv_row_variant "$v" "launch-fail" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "$lasterr"
+    csv_row_variant "$v" "launch-fail" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "$lasterr"
     archive_variant_logs "$v" || true
     stop_variant_server
     [ "${KEEP_DATA_DIR:-0}" = 1 ] || rm -rf "$VARIANT_DATA_DIR" 2>/dev/null || true
@@ -714,7 +749,7 @@ run_variant() { # variant
   archive_variant_logs "$v" || true
   [ "${KEEP_DATA_DIR:-0}" = 1 ] || rm -rf "$VARIANT_DATA_DIR" 2>/dev/null || true
   VARIANT_DATA_DIR=""
-  csv_row_variant "$v" "done" "$(variant_parallel "$v")" "$(variant_set_flags "$v")" "$(variant_env_pairs "$v")" "see summary.csv"
+  csv_row_variant "$v" "done" "$(variant_parallel "$v")" "$(variant_all_flags "$v")" "$(variant_env_pairs "$v")" "see summary.csv"
   rebuild_knobs_csv
 }
 
@@ -738,7 +773,7 @@ print_plan() {
       "$(variant_ctxs "$v" | tr ' ' ',')" "$(variant_batches "$v" | tr ' ' ',')"
     local r; r=$(variant_skip_reason "$v")
     if [ -n "$r" ]; then printf '  SKIP: %s\n' "$r"; continue; fi
-    printf '  set: %s\n' "$(variant_set_flags "$v")"
+    printf '  flags: %s\n' "$(variant_all_flags "$v")"
     printf '  env: %s\n' "$(variant_env_pairs "$v")"
   done
   echo
