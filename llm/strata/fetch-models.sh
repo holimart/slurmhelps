@@ -11,6 +11,16 @@
 # shards are required per pack. The picture reader (mmproj) is only fetched
 # with --with-mmproj; the benchmark runs with --vision off.
 #
+# Hub paths: the files live under IQ3_S/ and IQ1_M/ in their repositories, not
+# at the repo root.  `hf download REPO bare.gguf` exits 0 without fetching
+# anything, so this script always passes the prefixed path and then asserts
+# that the file exists with the exact pinned size.
+#
+# Shared shard 2: the 28,800,138,432-byte n-gram/PLE table is identical in the
+# IQ3_S and Coder repositories.  It is downloaded once into
+# $MODELS_ROOT/_shared/ and hardlinked into both pack directories (a real copy
+# is the fallback when hardlinks are unavailable).
+#
 # Usage:
 #   fetch-models.sh [--only iq3s|coder|all] [--verify] [--with-mmproj] [--submit]
 #
@@ -28,6 +38,7 @@
 # Layout produced (bench-matrix.sh expects exactly this):
 #   /work/ffa/holecem/models/strata/iq3s/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-0000[12]-of-00002.gguf
 #   /work/ffa/holecem/models/strata/coder/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-0000[12]-of-00002.gguf
+#   /work/ffa/holecem/models/strata/_shared/Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 #   /work/ffa/holecem/models/strata/manifest.txt   (append-only, one key=value line per file)
 #
 # Model download is a network operation; nothing in this script loads a model.
@@ -36,6 +47,8 @@ set -euo pipefail
 MODELS_ROOT=${MODELS_ROOT:-/work/ffa/holecem/models/strata}
 LOG_DIR=${LOG_DIR:-/work/ffa/holecem/logs}
 MANIFEST=$MODELS_ROOT/manifest.txt
+SHARED_DIR=${SHARED_DIR:-$MODELS_ROOT/_shared}
+SHARED_SHARD_FILE=Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 SUBMIT_PARTITION=${PARTITION:-ffa}
 
 ONLY=all
@@ -49,7 +62,7 @@ while [ $# -gt 0 ]; do
     --verify) VERIFY=1; shift ;;
     --with-mmproj) WITH_MMPROJ=1; shift ;;
     --submit) SUBMIT=1; shift ;;
-    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "fetch-models: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -76,15 +89,16 @@ hf_bin() {
   else echo "fetch-models: neither hf nor huggingface-cli on PATH" >&2; exit 3; fi
 }
 
-# repo file expected_bytes expected_sha256 — values from
+# repo hub_path expected_bytes expected_sha256 — values from
 # /work/ffa/holecem/src/Strata/setup.py (HF_REVISIONS pinned 2026-09-29).
+# hub_path includes the IQ3_S/ or IQ1_M/ repository subdirectory.
 files_iq3s() {
-  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf 54817524224 4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3"
-  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf 54817524224 4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3"
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
 }
 files_coder() {
-  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf 29608446496 e11083ba855e7666b48ea3f2db6a9c3a20c18751a012cc24f948de91b7087fad"
-  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf 29608446496 e11083ba855e7666b48ea3f2db6a9c3a20c18751a012cc24f948de91b7087fad"
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
 }
 mmproj() {
   echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF mmproj-Qwen3.8-Flash-Next-BF16.gguf 907543008 b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0"
@@ -95,27 +109,103 @@ manifest_line() { # repo file size sha status
     "$(date -u +%FT%TZ)" "$1" "$2" "$3" "$4" "$5" "$6" >> "$MANIFEST"
 }
 
-fetch_pack() { # variant_name subdir file_fn
-  local name=$1 sub=$2 fn=$3 HF rc repo file want_size want_sha path got
+file_size() { stat -c %s "$1" 2>/dev/null || echo 0; }
+is_shared_shard() { case "$1" in *-00002-of-00002.gguf) return 0 ;; esac; return 1; }
+
+link_or_copy() { # src dst label
+  local src=$1 dst=$2 label=${3:-$2}
+  mkdir -p "$(dirname "$dst")" || return 1
+  if [ -f "$dst" ] && [ "$(file_size "$dst")" = "$(file_size "$src")" ]; then
+    return 0
+  fi
+  rm -f "$dst"
+  if ln "$src" "$dst" 2>/dev/null; then
+    log "  hardlink $label"
+  else
+    cp -f "$src" "$dst" || return 1
+    log "  copy $label (hardlink unavailable)"
+  fi
+}
+
+# Download one Hub file (prefixed path) to dest, resuming into the pack dir.
+download_hub_file() { # repo sub hub_path dest want_size
+  local repo=$1 sub=$2 hub_path=$3 dest=$4 want_size=$5
+  local HF rc=0 staging="$MODELS_ROOT/$sub/$hub_path" got
   HF=$(hf_bin)
-  mkdir -p "$MODELS_ROOT/$sub"
-  while read -r repo file want_size want_sha; do
+  mkdir -p "$MODELS_ROOT/$sub/$(dirname "$hub_path")"
+  log "hf download $repo $hub_path -> $dest"
+  "$HF" download "$repo" "$hub_path" --local-dir "$MODELS_ROOT/$sub" || rc=$?
+  if [ ! -f "$staging" ]; then
+    log "FATAL: hf download rc=$rc but $staging does not exist"
+    log "       (bare filenames silently fetch nothing; pass the IQ3_S/ or IQ1_M/ path)"
+    return 1
+  fi
+  got=$(file_size "$staging")
+  if [ "$got" != "$want_size" ]; then
+    log "FATAL: hf download produced $got bytes, expected $want_size ($staging, rc=$rc)"
+    return 1
+  fi
+  if [ "$rc" != 0 ]; then
+    log "note: hf download rc=$rc but $staging is complete; accepting"
+  fi
+  if [ "$staging" != "$dest" ]; then
+    mkdir -p "$(dirname "$dest")"
+    mv -f "$staging" "$dest" || return 1
+  fi
+  [ "$(file_size "$dest")" = "$want_size" ] || {
+    log "FATAL: $dest is not $want_size bytes after download"; return 1; }
+}
+
+# The 28.8 GB shard 2 is byte-identical in both repos.  Keep one canonical
+# copy under _shared/ and hardlink it into each pack directory.
+ensure_shared_shard() { # repo sub hub_path file want_size
+  local repo=$1 sub=$2 hub_path=$3 file=$4 want_size=$5
+  # The two repos ship the same 28.8 GB table under different pack-specific
+  # filenames, so the canonical name must not depend on the pack.
+  local canonical="$SHARED_DIR/$SHARED_SHARD_FILE" cand
+  if [ "$(file_size "$canonical")" = "$want_size" ]; then
+    return 0
+  fi
+  for cand in "$MODELS_ROOT/iq3s/$file" "$MODELS_ROOT/coder/$file" \
+              "$MODELS_ROOT/models/IQ3_S/$file" \
+              "$MODELS_ROOT/models/coder-IQ1_M/$file"; do
+    if [ "$(file_size "$cand")" = "$want_size" ]; then
+      log "shared shard $file: reusing existing $cand"
+      link_or_copy "$cand" "$canonical" "$file -> _shared" || return 1
+      return 0
+    fi
+  done
+  download_hub_file "$repo" "$sub" "$hub_path" "$canonical" "$want_size"
+}
+
+fetch_pack() { # variant_name subdir file_fn
+  local name=$1 sub=$2 fn=$3 HF repo hub_path file want_size want_sha
+  local path got
+  HF=$(hf_bin)
+  mkdir -p "$MODELS_ROOT/$sub" "$SHARED_DIR"
+  while read -r repo hub_path want_size want_sha; do
     [ -n "$repo" ] || continue
+    file=${hub_path##*/}
     path=$MODELS_ROOT/$sub/$file
-    got=""
-    if [ -f "$path" ]; then got=$(stat -c %s "$path" 2>/dev/null || echo 0); fi
+    got=$(file_size "$path")
     if [ "$got" = "$want_size" ]; then
       log "$name: $file already complete ($want_size bytes), skip download"
       manifest_line "$repo" "$file" "$want_size" "$want_sha" pinned "$path"
       continue
     fi
-    log "$name: hf download $repo $file -> $path"
-    # hf download is resumable; --local-dir keeps the exact Hub filename.
-    "$HF" download "$repo" "$file" --local-dir "$MODELS_ROOT/$sub" || rc=$?
-    rc=${rc:-1}
-    got=$(stat -c %s "$path" 2>/dev/null || echo 0)
+    if is_shared_shard "$file"; then
+      ensure_shared_shard "$repo" "$sub" "$hub_path" "$file" "$want_size" || {
+        manifest_line "$repo" "$file" "$(file_size "$path")" "$want_sha" size-mismatch "$path"
+        return 1; }
+      link_or_copy "$SHARED_DIR/$SHARED_SHARD_FILE" "$path" "$name/$file" || return 1
+    else
+      download_hub_file "$repo" "$sub" "$hub_path" "$path" "$want_size" || {
+        manifest_line "$repo" "$file" "$(file_size "$path")" "$want_sha" size-mismatch "$path"
+        return 1; }
+    fi
+    got=$(file_size "$path")
     if [ "$got" != "$want_size" ]; then
-      log "$name: FAILED $file size $got != $want_size (rc=$rc)"
+      log "$name: FAILED $file size $got != $want_size"
       manifest_line "$repo" "$file" "$got" "$want_sha" size-mismatch "$path"
       return 1
     fi
@@ -130,9 +220,10 @@ fetch_pack() { # variant_name subdir file_fn
 # the fetch job's alternate dir; a file present in either counts.
 audit_pack() { # variant_name file_fn dir [dir...]
   local name=$1 fn=$2; shift 2
-  local dirs=("$@") repo file want_size want_sha path d got real
-  while read -r repo file want_size want_sha; do
+  local dirs=("$@") repo hub_path file want_size want_sha path d got real
+  while read -r repo hub_path want_size want_sha; do
     [ -n "$repo" ] || continue
+    file=${hub_path##*/}
     path=""
     for d in "${dirs[@]}"; do
       if [ -f "$d/$file" ]; then path=$d/$file; break; fi
