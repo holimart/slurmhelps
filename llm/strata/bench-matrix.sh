@@ -23,15 +23,18 @@
 #
 # Usage:
 #   bench-matrix.sh [--model iq3s|coder|both] [--contexts 1024,4096]
-#                   [--batches 1,4] [--max-tokens N] [--requests-per-slot N]
-#                   [--outdir DIR] [--budget-min MIN] [--self-test]
+#                   [--batches 1,4] [--gpus 0,1] [--max-tokens N]
+#                   [--requests-per-slot N] [--outdir DIR] [--budget-min MIN]
+#                   [--self-test]
 #
-#   --model X            pack(s) to benchmark (default: both)
+#   --model X            pack(s) to benchmark (default: both; MODEL_NAME works)
 #   --contexts LIST      prompt size in tokens, comma-separated
 #                        (default "1024,4096"; V100 nodes: use only
 #                         1024,4096,16384,65536 — docs/NVIDIA_V100.md)
 #   --batches LIST       concurrent clients per cell, comma-separated
 #                        (default "1,4"; strata launch caps --parallel at 8)
+#   --gpus LIST          GPU numbers for strata launch --gpu, e.g. 0,1
+#                        (default: auto / one card; GPUS_PER_NODE=2 -> 0,1)
 #   --max-tokens N       completion length per request (default 128)
 #   --requests-per-slot N  sequential requests per concurrent client (default 3)
 #   --outdir DIR         results root (default $RESULTS_ROOT/strata-bench-<job>-<ts>)
@@ -41,17 +44,28 @@
 #                        gguf: no Slurm, no GPU, no Strata, no model download.
 #                        Binds 127.0.0.1 only and kills the stub on exit.
 #
-# Environment overrides:
+# Environment overrides (the CLI flags win):
 #   STRATA_ROOT   Strata install from install-engine.sh (default /work/ffa/holecem/strata-engine)
 #   MODELS_ROOT   GGUF library from fetch-models.sh  (default /work/ffa/holecem/models/strata)
-#   DATA_DIR      persistent engine data dir, holds the MTP drafter download
-#                 (default $MODELS_ROOT/_strata-data)
+#   DATA_DIR      engine data *staging root*; each job gets a private
+#                 $DATA_DIR/jobs/<job-id> seeded from its mtp/ and packs/ trees
+#                 (default $MODELS_ROOT/_strata-data). The private copy is
+#                 removed on exit unless KEEP_DATA_DIR=1.
+#   MODEL_NAME    iq3s|coder|both (same as --model; unknown values are fatal)
+#   GPUS_PER_NODE number of cards to use (default 1; >1 passes --gpu 0,1,...)
 #   RESULTS_ROOT  where --outdir defaults live (default /work/ffa/holecem/results)
 #   SCRATCH_ROOT  node-local root for the model copy (default /tmp)
 #   COPY_MODELS   1 (default) copy shards to SCRATCH_ROOT; 0 read straight from
 #                 Lustre (slow first-token on big contexts, but /tmp is small)
 #   READY_TIMEOUT_S per-server readiness cap (default 2700)
+#   CXX_LIB_DIR   dir with a newer libstdc++.so.6 for the cuda13 engine
+#                 (default the reusable /work/ffa/holecem/strata-runs/
+#                 2026-10-25-l40x1/deps/cxx/lib)
 #   SELFTEST_DIR  scratch for --self-test (default /work/ffa/holecem/tmp/strata-agent-selftest)
+#
+# Slurm note: NEVER put comma lists in --export. Slurm splits the value at
+# commas (CTXS=1024,4096 becomes CTXS=1024 plus a bogus 4096 key). Pass
+# --contexts/--batches as trailing CLI args to strata-bench.sbatch instead.
 #
 # Gotchas (verified against Strata docs/, see README.md):
 #   - `strata launch` downloads the ~5-6 GB MTP draft layer from the original
@@ -72,13 +86,17 @@ SCRATCH_ROOT=${SCRATCH_ROOT:-/tmp}
 COPY_MODELS=${COPY_MODELS:-1}
 READY_TIMEOUT_S=${READY_TIMEOUT_S:-2700}
 SELFTEST_DIR=${SELFTEST_DIR:-/work/ffa/holecem/tmp/strata-agent-selftest}
+CXX_LIB_DIR=${CXX_LIB_DIR:-/work/ffa/holecem/strata-runs/2026-10-25-l40x1/deps/cxx/lib}
 
-MODEL=both
+# MODEL_NAME is the documented interface; MODEL is accepted as a legacy alias.
+MODEL=${MODEL_NAME:-${MODEL:-both}}
 CTXS=${CTXS:-1024,4096}
 BATCHES=${BATCHES:-1,4}
 MAX_TOKENS=${MAX_TOKENS:-128}
 RPS=${RPS:-3}
 BUDGET_MIN=${BUDGET_MIN:-420}
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}
+GPU_LIST=${GPU_LIST:-}
 OUTDIR=${OUTDIR:-}
 SELF_TEST=0
 
@@ -90,6 +108,8 @@ while [ $# -gt 0 ]; do
     --contexts=*) CTXS=${1#*=}; shift ;;
     --batches) BATCHES=${2:?--batches needs e.g. 1,4}; shift 2 ;;
     --batches=*) BATCHES=${1#*=}; shift ;;
+    --gpus) GPU_LIST=${2:?--gpus needs e.g. 0,1}; shift 2 ;;
+    --gpus=*) GPU_LIST=${1#*=}; shift ;;
     --max-tokens) MAX_TOKENS=${2:?}; shift 2 ;;
     --max-tokens=*) MAX_TOKENS=${1#*=}; shift ;;
     --requests-per-slot) RPS=${2:?}; shift 2 ;;
@@ -99,11 +119,28 @@ while [ $# -gt 0 ]; do
     --budget-min) BUDGET_MIN=${2:?}; shift 2 ;;
     --budget-min=*) BUDGET_MIN=${1#*=}; shift ;;
     --self-test) SELF_TEST=1; shift ;;
-    -h|--help) sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "bench-matrix: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$MODEL" in iq3s|coder|both) ;; *) echo "bench-matrix: --model must be iq3s|coder|both" >&2; exit 2 ;; esac
+case "${MODEL,,}" in
+  iq3s|iq3_s) MODEL=iq3s ;;
+  coder|iq1_m) MODEL=coder ;;
+  both|all) MODEL=both ;;
+  *) echo "bench-matrix: MODEL_NAME/MODEL/--model must be iq3s|coder|both (got '$MODEL')" >&2; exit 2 ;;
+esac
+if ! [[ "$GPUS_PER_NODE" =~ ^[0-9]+$ ]] || [ "$GPUS_PER_NODE" -lt 1 ]; then
+  echo "bench-matrix: GPUS_PER_NODE must be a positive integer (got '$GPUS_PER_NODE')" >&2
+  exit 2
+fi
+if [ -n "$GPU_LIST" ]; then
+  if ! [[ "$GPU_LIST" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+    echo "bench-matrix: --gpus/GPU_LIST must look like 0 or 0,1 (got '$GPU_LIST')" >&2
+    exit 2
+  fi
+elif [ "$GPUS_PER_NODE" -gt 1 ]; then
+  GPU_LIST=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+fi
 list_max() { printf '%s\n' "${1//,/ }" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n | tail -1; }
 MAXCTX=$(list_max "$CTXS"); MAXPAR=$(list_max "$BATCHES")
 [ -n "$MAXCTX" ] && [ -n "$MAXPAR" ] || { echo "bench-matrix: --contexts/--batches need numbers" >&2; exit 2; }
@@ -139,6 +176,20 @@ SERVER_PID=""        # stub pid
 SERVER_MODEL=""      # id reported by /v1/models
 CUR_MODEL=""
 CUR_DIR=""
+SHARED_DATA_DIR=${DATA_DIR:-}
+JOB_DATA_DIR=""
+DATA_ISOLATED=0
+PREPARE_LOCKED=0
+
+# Engine launch logs live under the per-job state dir inside /tmp; the EXIT
+# trap used to delete them before anyone could read them. Archive them first.
+archive_engine_logs() {
+  local dest=$OUTDIR/${CUR_MODEL:-unknown}/engine-logs
+  [ -d "$XDG_STATE_HOME/strata" ] || return 0
+  mkdir -p "$dest" 2>/dev/null || return 0
+  cp -a "$XDG_STATE_HOME/strata/." "$dest/" 2>/dev/null || true
+  log "archived engine logs to $dest"
+}
 
 stop_everything() {
   local rc=$?
@@ -150,10 +201,90 @@ stop_everything() {
     wait "$SERVER_PID" 2>/dev/null || true
   fi
   SERVER=none
+  archive_engine_logs || true
+  release_prepare_lock
   [ "${KEEP_SCRATCH:-0}" = 1 ] || rm -rf "$JOB_LOCAL" 2>/dev/null || true
+  if [ "$DATA_ISOLATED" = 1 ] && [ "${KEEP_DATA_DIR:-0}" != 1 ]; then
+    rm -rf "$JOB_DATA_DIR" 2>/dev/null || true
+  fi
   return $rc
 }
 trap stop_everything EXIT
+
+# ---- libstdc++ floor (cuda13 engine on EL9) -----------------------------------
+# The cuda13 engine links GLIBCXX_3.4.30+, but the gpu-ffa EL9 image tops out at
+# GLIBCXX_3.4.29.  A newer libstdc++ is reusable from the l40x1 run; prepend it
+# when needed instead of burning the 45-min readiness timeout on exec failures.
+precheck_engine_libs() {
+  local cap variant bin need lib
+  cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
+        | head -1 | tr -d ' ')
+  if [ -z "$cap" ]; then
+    if nvidia-smi -L 2>/dev/null | grep -qi 'V100'; then cap=7.0; else cap=8.9; fi
+  fi
+  case "$cap" in 7.*) variant=cuda12 ;; *) variant=cuda13 ;; esac
+  bin=$(ls -1d "$STRATA_ROOT"/components/engine/*cuda-${variant}*/strata 2>/dev/null | head -1)
+  [ -n "$bin" ] || return 0
+  need=$(strings "$bin" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1)
+  [ -n "$need" ] || return 0
+  lib=$(ldconfig -p 2>/dev/null | awk '/libstdc\+\+\.so\.6 /{print $NF; exit}')
+  if [ -n "$lib" ] && strings "$lib" 2>/dev/null | grep -qx "$need"; then
+    return 0
+  fi
+  if [ -f "$CXX_LIB_DIR/libstdc++.so.6" ] \
+     && strings "$CXX_LIB_DIR/libstdc++.so.6" 2>/dev/null | grep -qx "$need"; then
+    export LD_LIBRARY_PATH="$CXX_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    log "precheck: engine $variant needs $need; prepended $CXX_LIB_DIR to LD_LIBRARY_PATH"
+    return 0
+  fi
+  log "FATAL: engine $variant requires $need but the node libstdc++ (${lib:-not found}) lacks it."
+  log "       Stage a newer libstdc++ (conda-forge libstdcxx-ng) and either export"
+  log "       LD_LIBRARY_PATH or set CXX_LIB_DIR to the directory holding libstdc++.so.6."
+  return 5
+}
+
+# ---- private per-job engine data dir -----------------------------------------
+# The old runner shared --data-dir across concurrent jobs; both engines wrote
+# mtp/rt/experts.bin at once and one read a truncated file.  Seed a private
+# tree (hardlinks for the read-only tensors/packs, a real copy of the small
+# mutable rt/ tree) and never let two jobs build the shared tree concurrently.
+seed_private_data_dir() { # shared private
+  local shared=$1 private=$2
+  rm -rf "$private"
+  mkdir -p "$private" || return 1
+  [ -d "$shared/mtp" ] || return 1
+  cp -al "$shared/mtp" "$private/mtp" 2>/dev/null \
+    || cp -a "$shared/mtp" "$private/mtp" 2>/dev/null || return 1
+  # rt/ is small (~0.8 GiB) and is the only tree the engine may rewrite.
+  if [ -d "$shared/mtp/rt" ]; then
+    rm -rf "$private/mtp/rt"
+    cp -a "$shared/mtp/rt" "$private/mtp/rt" 2>/dev/null || return 1
+  fi
+  if [ -d "$shared/packs" ]; then
+    cp -al "$shared/packs" "$private/packs" 2>/dev/null \
+      || cp -a "$shared/packs" "$private/packs" 2>/dev/null || return 1
+  fi
+  [ -f "$private/mtp/rt/dense.bin" ] \
+    && [ -f "$private/mtp/rt/experts.bin" ] \
+    && [ -f "$private/mtp/rt/draft_vocab.bin" ] || return 1
+  return 0
+}
+
+acquire_prepare_lock() {
+  [ "$DATA_ISOLATED" = 1 ] && return 0
+  mkdir -p "$SHARED_DATA_DIR" || return 1
+  exec 9>"$SHARED_DATA_DIR/.prepare.lock"
+  if ! flock 9; then exec 9>&-; return 1; fi
+  PREPARE_LOCKED=1
+  log "holding $SHARED_DATA_DIR/.prepare.lock while the shared drafter/pack tree is prepared"
+}
+
+release_prepare_lock() {
+  [ "$PREPARE_LOCKED" = 1 ] || return 0
+  flock -u 9 2>/dev/null || true
+  exec 9>&-
+  PREPARE_LOCKED=0
+}
 
 free_port() {
   python3 - <<'PY'
@@ -216,13 +347,16 @@ PY
 # ---- server control -----------------------------------------------------------
 launch_strata_server() { # model_dir port
   local dir=$1 port=$2 logf=$OUTDIR/$CUR_MODEL/launch-$(date -u +%H%M%S).log
+  local gpu_args=()
+  [ -n "$GPU_LIST" ] && gpu_args=(--gpu "$GPU_LIST")
   mkdir -p "$OUTDIR/$CUR_MODEL"
-  log "launch: strata launch --model-path $dir --context $MAXCTX --parallel $MAXPAR --kv int8 --vision off --access local --port $port --data-dir $DATA_DIR (log $logf)"
+  log "launch: strata launch --model-path $dir --context $MAXCTX --parallel $MAXPAR${GPU_LIST:+ --gpu $GPU_LIST} --kv int8 --vision off --access local --port $port --data-dir $DATA_DIR (log $logf)"
   mkdir -p "$DATA_DIR"
   "$STRATA_ROOT/bin/strata" launch \
     --model-path "$dir" \
     --context "$MAXCTX" \
     --parallel "$MAXPAR" \
+    ${gpu_args[@]+"${gpu_args[@]}"} \
     --kv int8 \
     --vision off \
     --access local \
@@ -351,7 +485,8 @@ run_matrix() { # port ; uses CUR_MODEL/CUR_DIR/SERVER_MODEL, OUTDIR
       rc=0
       timeout $((90 + RPS * 1800)) python3 "$PROBE" \
         --base-url "http://127.0.0.1:$port" --model "$SERVER_MODEL" \
-        --context "$ctx" --concurrency "$c" --max-tokens "$MAX_TOKENS" \
+        --context "$ctx" --concurrency "$c" --max-context "$MAXCTX" \
+        --max-tokens "$MAX_TOKENS" \
         --requests-per-slot "$RPS" --json-out "$cells" || rc=$?
       if [ "$rc" = 1 ] && [ "$restarts" -lt 3 ] && [ "$SERVER" != stub ] \
          && ! server_alive "$port"; then
@@ -362,7 +497,8 @@ run_matrix() { # port ; uses CUR_MODEL/CUR_DIR/SERVER_MODEL, OUTDIR
           rc=0
           timeout $((90 + RPS * 1800)) python3 "$PROBE" \
             --base-url "http://127.0.0.1:$port" --model "$SERVER_MODEL" \
-            --context "$ctx" --concurrency "$c" --max-tokens "$MAX_TOKENS" \
+            --context "$ctx" --concurrency "$c" --max-context "$MAXCTX" \
+            --max-tokens "$MAX_TOKENS" \
             --requests-per-slot "$RPS" --json-out "$cells" || rc=$?
         fi
       fi
@@ -390,6 +526,8 @@ self_test() {
   mkdir -p "$OUTDIR"
   CTXS=512,1024
   BATCHES=1,2
+  MAXCTX=1024
+  MAXPAR=2
   MAX_TOKENS=32
   RPS=2
   local port rc=0 cells csv n
@@ -414,16 +552,52 @@ import json, sys
 rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
 bad = [r for r in rows if r.get("error") or not r.get("decode_tok_s_p50")]
 for r in rows:
-    print("  cell ctx=%s C=%s decode=%s agg=%s ttft=%s ok=%s/%s" % (
-        r["context"], r["concurrency"], r["decode_tok_s_p50"], r["aggregate_tok_s"],
-        r["ttft_s_p50"], r["requests_ok"], r["requests_ok"] + r["requests_failed"]))
+    print("  cell ctx=%s C=%s target=%s clamped=%s decode=%s agg=%s ttft=%s ok=%s/%s"
+          % (r["context"], r["concurrency"], r.get("prompt_target_tokens"),
+             r.get("prompt_clamped"), r["decode_tok_s_p50"], r["aggregate_tok_s"],
+             r["ttft_s_p50"], r["requests_ok"],
+             r["requests_ok"] + r["requests_failed"]))
 assert not bad, "cells with error or missing decode: %s" % bad
 for r in rows:
     assert 90 <= r["decode_tok_s_p50"] <= 110, "decode p50 %s outside stub band" % r["decode_tok_s_p50"]
     assert r["requests_failed"] == 0, "failed requests in %s" % (r,)
+    cal = r.get("calibration") or {}
+    assert cal.get("prompt_tokens") and 3.0 <= cal.get("chars_per_token", 0) <= 5.0, \
+        "calibration not recorded/plausible: %s" % cal
+    assert r.get("prompt_target_tokens"), "prompt target not recorded"
+    if r["context"] == 1024:
+        assert r["prompt_clamped"] is True, "1024 cell should clamp to the 1024 window"
+        assert r["prompt_target_tokens"] <= 1024 - 32 - 128, "clamp left no answer headroom"
 print("  JSONL contract + stub decode band (90..110 tok/s): ok")
+print("  prompt calibration + window clamp: ok")
 PY
   grep -q ',ok$' "$csv" || { log "FAIL: no status=ok rows"; rc=1; }
+  # Engine logs must be archived before the EXIT trap deletes the scratch dir.
+  mkdir -p "$XDG_STATE_HOME/strata/launch"
+  echo "selftest engine log" > "$XDG_STATE_HOME/strata/launch/selftest.engine.log"
+  CUR_MODEL=selftest
+  archive_engine_logs
+  [ -f "$OUTDIR/selftest/engine-logs/launch/selftest.engine.log" ] \
+    || { log "FAIL: engine log was not archived"; rc=1; }
+
+  # Private data dir: read-only trees may be hardlinked, but the mutable rt/
+  # tree must be isolated from the shared staging copy.
+  local shared=$SELFTEST_DIR/shared-data private=$SELFTEST_DIR/private-data
+  mkdir -p "$shared/mtp/rt" "$shared/mtp/tensors" "$shared/packs/iq3_s"
+  echo tensors > "$shared/mtp/tensors/a.bin"
+  echo dense > "$shared/mtp/rt/dense.bin"
+  echo experts > "$shared/mtp/rt/experts.bin"
+  echo vocab > "$shared/mtp/rt/draft_vocab.bin"
+  echo pack > "$shared/packs/iq3_s/pack.bin"
+  if seed_private_data_dir "$shared" "$private"; then
+    [ -f "$private/mtp/tensors/a.bin" ] && [ -f "$private/packs/iq3_s/pack.bin" ] \
+      || { log "FAIL: private data dir missing hardlinked trees"; rc=1; }
+    echo changed > "$private/mtp/rt/experts.bin"
+    [ "$(cat "$shared/mtp/rt/experts.bin")" = experts ] \
+      || { log "FAIL: private rt write leaked into the shared data dir"; rc=1; }
+  else
+    log "FAIL: seed_private_data_dir rejected a complete fake tree"; rc=1
+  fi
   kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; SERVER=none
   if [ "$rc" = 0 ]; then
     log "SELF-TEST PASS — results under $OUTDIR (self-test scratch kept)"
@@ -445,6 +619,26 @@ if [ -z "${SLURM_JOB_ID:-}" ]; then
   exit 2
 fi
 [ -x "$STRATA_ROOT/bin/strata" ] || { log "FATAL: $STRATA_ROOT/bin/strata missing — run install-engine.sh first"; exit 3; }
+precheck_engine_libs || exit $?
+
+if command -v nvidia-smi >/dev/null 2>&1; then
+  visible_gpus=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU' || true)
+  if [ "${visible_gpus:-0}" -lt "$GPUS_PER_NODE" ]; then
+    log "FATAL: GPUS_PER_NODE=$GPUS_PER_NODE but only ${visible_gpus:-0} GPU(s) visible on this node"
+    exit 4
+  fi
+fi
+
+SHARED_DATA_DIR=$DATA_DIR
+JOB_DATA_DIR=$SHARED_DATA_DIR/jobs/$JOB
+if seed_private_data_dir "$SHARED_DATA_DIR" "$JOB_DATA_DIR"; then
+  DATA_DIR=$JOB_DATA_DIR
+  DATA_ISOLATED=1
+  log "private engine data dir: $DATA_DIR (seeded from $SHARED_DATA_DIR)"
+else
+  rm -rf "$JOB_DATA_DIR" 2>/dev/null || true
+  log "shared engine data dir has no complete drafter tree; using $SHARED_DATA_DIR with a prepare lock"
+fi
 
 models=both
 [ "$MODEL" = both ] && models="iq3s coder" || models=$MODEL
@@ -452,7 +646,9 @@ for m in $models; do
   log "=== model pack: $m ==="
   prepare_model_dir "$m" || { log "skipping $m (staging failed)"; continue; }
   port=$(free_port)
+  acquire_prepare_lock || { log "FATAL: cannot lock $SHARED_DATA_DIR"; exit 6; }
   if ! launch_strata_server "$CUR_DIR" "$port"; then
+    release_prepare_lock
     log "server for $m never became ready; recording failed matrix"
     mkdir -p "$OUTDIR/$m"
     for ctx in ${CTXS//,/ }; do for c in ${BATCHES//,/ }; do
@@ -461,8 +657,10 @@ for m in $models; do
     stop_strata_server
     continue
   fi
+  release_prepare_lock
   run_matrix "$port"
   stop_strata_server
+  archive_engine_logs
 done
 
 log "done. results in $OUTDIR"

@@ -16,6 +16,15 @@
 #     --gres=gpu:1 --mem=190G --cpus-per-task=24 \
 #     llm/strata/strata-bench.sbatch --model coder
 #
+#   # 2-GPU L40 node (runner passes --gpu 0,1 and the engine layer-splits):
+#   sbatch --nice=100 --nodelist=gpuffaNN llm/strata/strata-bench.sbatch \
+#     --gpus 0,1 --model iq3s
+#
+# Matrix knobs are CLI args, not --export values: Slurm splits comma lists
+# inside --export (CTXS=1024,4096 becomes CTXS=1024 + a bogus 4096 key).
+# MODEL_NAME / GPUS_PER_NODE are honored env overrides, but --model / --gpus
+# are safer and win.
+#
 # Node shape below is the L40 (gpu-ffa) default: one L40 48 GB, enough host
 # RAM for the IQ3_S pack (54.8 GB experts in RAM + 28.8 GB n-gram table
 # mmap'd + KV), 12 h headroom minus cleanup. --time fits both partitions'
