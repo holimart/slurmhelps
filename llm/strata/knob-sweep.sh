@@ -346,6 +346,7 @@ JOB=${SLURM_JOB_ID:-local}
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 if [ -z "$OUTDIR" ]; then OUTDIR=$RESULTS_ROOT/strata-knobs-$JOB-$TS; fi
 PROBE=$here/strata_probe.py
+PROBE_SRC=$here/strata_probe.py
 STUB=$here/tests/stub_server.py
 
 JOB_LOCAL=$SCRATCH_ROOT/strata-knobs-$JOB
@@ -921,6 +922,12 @@ fi
 BUDGET_EXCEEDED=0
 prepare_model_dir "$MODEL" || { log "FATAL: model staging failed; nothing swept"; exit 3; }
 CUR_MODEL=$MODEL
+
+# Snapshot the probe for the whole job: a sweep must not change measurement
+# code between variants because another session edited the checkout.
+cp "$PROBE_SRC" "$JOB_LOCAL/strata_probe.py"
+PROBE=$JOB_LOCAL/strata_probe.py
+log "probe snapshot: $PROBE ($(sha256sum "$PROBE" | cut -c1-16))"
 
 cleanup() {
   local rc=$?
