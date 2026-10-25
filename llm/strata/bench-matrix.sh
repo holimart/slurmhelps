@@ -228,11 +228,13 @@ precheck_engine_libs() {
   need=$(strings "$bin" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1)
   [ -n "$need" ] || return 0
   lib=$(ldconfig -p 2>/dev/null | awk '/libstdc\+\+\.so\.6 /{print $NF; exit}')
-  if [ -n "$lib" ] && strings "$lib" 2>/dev/null | grep -qx "$need"; then
+  # No `strings | grep -q`: grep -q exits early, strings takes SIGPIPE, and
+  # `set -o pipefail` turns a successful match into status 141.  awk reads to EOF.
+  has_symbol() { strings "$1" 2>/dev/null | awk -v n="$need" '$0==n{f=1} END{exit !f}'; }
+  if [ -n "$lib" ] && has_symbol "$lib"; then
     return 0
   fi
-  if [ -f "$CXX_LIB_DIR/libstdc++.so.6" ] \
-     && strings "$CXX_LIB_DIR/libstdc++.so.6" 2>/dev/null | grep -qx "$need"; then
+  if [ -f "$CXX_LIB_DIR/libstdc++.so.6" ] && has_symbol "$CXX_LIB_DIR/libstdc++.so.6"; then
     export LD_LIBRARY_PATH="$CXX_LIB_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     log "precheck: engine $variant needs $need; prepended $CXX_LIB_DIR to LD_LIBRARY_PATH"
     return 0
