@@ -2,9 +2,10 @@
 """strata_probe.py — OpenAI-compatible streaming benchmark probe (stdlib only).
 
 One "cell" = C concurrent clients, each sending R sequential streaming chat
-completions with a prompt calibrated to ~N real tokens (one tiny include_usage
-request measures chars/token first; nominal N is clamped to
-max_context - max_tokens - pad_safety). Measures, over the samples:
+completions with a prompt calibrated to ~N real tokens (two tiny include_usage
+requests measure the chars/token slope and chat-template overhead first;
+nominal N is clamped to max_context - max_tokens - pad_safety). Measures,
+over the samples:
 
   - TTFT (client monotonic time from dispatch to first content/reasoning/
     tool-call delta — the definition in Strata's docs/BENCHMARK_PROTOCOL.md)
@@ -67,12 +68,15 @@ def build_filler(target_chars, salt, context):
     return "".join(parts)
 
 
-def build_prompt(context, salt, chars_per_token=DEFAULT_CHARS_PER_TOKEN):
+def build_prompt(context, salt, chars_per_token=DEFAULT_CHARS_PER_TOKEN,
+                 intercept_tokens=0.0):
     """Filler scaled so the server tokenizer sees about `context` tokens.
 
-    `chars_per_token` is measured from a real include_usage request (see
-    calibrate_chars_per_token); 4.0 is only the last-resort fallback."""
-    return build_filler(float(context) * float(chars_per_token), salt, context)
+    `chars_per_token` and `intercept_tokens` are measured from real
+    include_usage requests (see calibrate_chars_per_token); a zero intercept
+    is the last-resort fallback."""
+    chars = (float(context) - float(intercept_tokens)) * float(chars_per_token)
+    return build_filler(max(1.0, chars), salt, context)
 
 
 def percentile(values, q):
@@ -237,36 +241,66 @@ def stream_one(base, model, prompt, max_tokens, temperature, timeout):
     return rec
 
 
-def calibrate_chars_per_token(base, model, temperature, timeout, max_context):
-    """Measure the real chars/token ratio with one tiny include_usage request.
-
-    The old hard-coded 4.0 chars/token overshot the tokenizer by ~14% at
-    large contexts, which made nominal 131072-token cells 400s.  A 256-512
-    token calibration prompt is enough to measure the ratio without touching
-    the matrix budget.  Returns a dict that is recorded in every JSONL cell.
-    """
-    chars = 2048
-    if max_context:
-        # Keep the calibration prompt well under the server window.
-        chars = max(256, min(chars, int(max_context) * 2))
+def _calibration_point(base, model, temperature, timeout, chars):
     prompt = build_filler(chars, "cal-" + uuid.uuid4().hex[:12], 0)
     rec = stream_one(base, model, prompt, 1, temperature,
                      min(timeout, 120.0))
-    prompt_tokens = rec.get("prompt_tokens")
-    out = {"source": "include_usage", "prompt_chars": len(prompt),
-           "prompt_tokens": prompt_tokens, "chars_per_token":
-           DEFAULT_CHARS_PER_TOKEN, "tokens_per_char":
-           1.0 / DEFAULT_CHARS_PER_TOKEN}
-    if rec.get("ok") and isinstance(prompt_tokens, int) and prompt_tokens > 0:
-        ratio = len(prompt) / float(prompt_tokens)
+    return len(prompt), rec.get("prompt_tokens"), rec.get("ok")
+
+
+def calibrate_chars_per_token(base, model, temperature, timeout, max_context):
+    """Measure the tokenizer's chars/token slope and fixed template overhead.
+
+    The old hard-coded 4.0 chars/token overshot by ~14% at large contexts,
+    which made nominal 131072-token cells 400s.  A single small prompt is
+    biased by the chat-template tokens (it makes the ratio look smaller), so
+    measure two small points and fit
+        prompt_tokens = intercept + prompt_chars / chars_per_token.
+    Both calibration prompts are kept well under the server window.  Returns
+    a dict recorded in every JSONL cell.
+    """
+    points_chars = [2048, 8192]
+    if max_context:
+        cap = max(512, int(max_context) * 2)
+        points_chars = [min(2048, cap // 2), min(8192, cap)]
+        if points_chars[1] <= points_chars[0]:
+            points_chars = [max(256, cap // 4), max(512, cap // 2)]
+    measured = []
+    for chars in points_chars:
+        got_chars, got_tokens, ok = _calibration_point(
+            base, model, temperature, timeout, chars)
+        measured.append({"prompt_chars": got_chars,
+                         "prompt_tokens": got_tokens, "ok": bool(ok)})
+    out = {"source": "include_usage+2point", "points": measured,
+           "prompt_chars": measured[0]["prompt_chars"],
+           "prompt_tokens": measured[0]["prompt_tokens"],
+           "chars_per_token": DEFAULT_CHARS_PER_TOKEN,
+           "tokens_per_char": 1.0 / DEFAULT_CHARS_PER_TOKEN,
+           "intercept_tokens": 0.0}
+    good = [p for p in measured
+            if p["ok"] and isinstance(p["prompt_tokens"], int)
+            and p["prompt_tokens"] > 0]
+    if len(good) >= 2:
+        (c1, t1), (c2, t2) = ((good[0]["prompt_chars"], good[0]["prompt_tokens"]),
+                              (good[1]["prompt_chars"], good[1]["prompt_tokens"]))
+        if c2 != c1 and t2 != t1:
+            slope = (c2 - c1) / float(t2 - t1)          # chars per token
+            intercept = t1 - (c1 / slope)               # template tokens
+            if 1.5 <= slope <= 8.0 and -2048.0 <= intercept <= 2048.0:
+                out.update({"chars_per_token": slope,
+                            "tokens_per_char": 1.0 / slope,
+                            "intercept_tokens": intercept})
+                return out
+    if good:
+        ratio = good[0]["prompt_chars"] / float(good[0]["prompt_tokens"])
         if 1.5 <= ratio <= 8.0:
-            out["chars_per_token"] = ratio
-            out["tokens_per_char"] = 1.0 / ratio
+            out.update({"source": "include_usage+1point",
+                        "chars_per_token": ratio,
+                        "tokens_per_char": 1.0 / ratio,
+                        "intercept_tokens": 0.0})
             return out
-        out["error"] = "implausible chars/token %.3f" % ratio
-    else:
-        out["error"] = rec.get("error") or "no prompt_tokens in usage"
     out["source"] = "fallback-4.0"
+    out["error"] = "no usable include_usage calibration points"
     return out
 
 
@@ -283,10 +317,11 @@ def prompt_budget(nominal_context, max_context, max_tokens, safety):
 
 
 def worker(out, lock, base, model, context, prompt_tokens, chars_per_token,
-           max_tokens, temperature, timeout, count, slot):
+           intercept_tokens, max_tokens, temperature, timeout, count, slot):
     for i in range(count):
         salt = "%s-%d-%d" % (uuid.uuid4().hex[:8], slot, i)
-        prompt = build_prompt(prompt_tokens, salt, chars_per_token)
+        prompt = build_prompt(prompt_tokens, salt, chars_per_token,
+                              intercept_tokens)
         rec = stream_one(base, model, prompt, max_tokens, temperature, timeout)
         rec["slot"] = slot
         rec["seq"] = i
@@ -352,6 +387,7 @@ def main():
         th = threading.Thread(target=worker,
                               args=(results, lock, base, args.model, args.context,
                                     prompt_tokens, calibration["chars_per_token"],
+                                    calibration.get("intercept_tokens", 0.0),
                                     args.max_tokens, args.temperature,
                                     args.timeout, args.rps, slot))
         th.daemon = True
@@ -418,13 +454,14 @@ def main():
         fh.write(json.dumps(line) + "\n")
 
     print("[strata-probe] ctx=%d target=%d%s C=%d ok=%d/%d decode p50=%s agg=%s "
-          "ttft p50=%s cal=%.3f chars/tok -> %s"
+          "ttft p50=%s cal=%.3f chars/tok+%.0f -> %s"
           % (args.context, prompt_tokens, " (clamped)" if clamped else "",
              args.concurrency, len(ok), len(results),
              "%.1f" % line["decode_tok_s_p50"] if line["decode_tok_s_p50"] else "-",
              "%.1f" % line["aggregate_tok_s"] if line["aggregate_tok_s"] else "-",
              "%.3f" % line["ttft_s_p50"] if line["ttft_s_p50"] else "-",
-             calibration["chars_per_token"], args.json_out))
+             calibration["chars_per_token"],
+             calibration.get("intercept_tokens", 0.0), args.json_out))
     if err:
         print("[strata-probe] error: %s" % err, file=sys.stderr)
         sys.exit(1)
