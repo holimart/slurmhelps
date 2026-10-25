@@ -16,8 +16,13 @@ strata-bench.sbatch           Slurm entry point (execs bench-matrix.sh)
 bench-matrix.sh               the matrix runner (server per model, cells, CSV/JSONL)
 knob-sweep.sbatch             Slurm entry point (execs knob-sweep.sh)
 knob-sweep.sh                 one-knob-at-a-time sweep at small contexts
-strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run)
-tests/stub_server.py          fake server for --self-test (127.0.0.1 only)
+warm-cache.sbatch             Slurm entry point (execs warm-cache.sh)
+warm-cache.sh                 warm (cache-reuse) TTFT rerun of the baseline recipe
+strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run;
+                              --mode cold|warm, cold is the default)
+tests/stub_server.py          fake server for --self-test (127.0.0.1 only;
+                              --cache-reuse simulates prompt reuse)
+tests/test_warm_probe.py      stub-server regression test for probe warm mode
 tests/test_fetch_models.sh    offline fake-hf regression test for fetch-models.sh
 experiments/…                 protocol + results of each campaign
 ```
@@ -227,6 +232,47 @@ error and the sweep continues with the next variant. Re-running with the same
 `--outdir` needs `--resume` (keep complete variants) or `--force`; partial
 variant dirs are moved to `*.bak-<ts>` before a retry.
 
+## Warm vs cold cache
+
+The matrix deliberately salts every prompt, so all cold `reused=0` and TTFT
+is a full prefill. `strata_probe.py --mode warm` measures the other half:
+one **saltless** request per slot, then `--warm-repeats N` byte-identical
+repeats; repeat 1 is the same-prompt cold reference, repeats 2..N hit the
+engine's prompt/conversation cache. Cold mode is unchanged (same JSONL key
+set). Extra warm fields: `mode`, `ttft_cold_s`, `ttft_warm_s_p50/p95`,
+`reused_tokens_p50`, `reused_tokens_total`, `cache_reuse_engaged`,
+`conversation_cache_before/after` (budget/slots), `repeat_breakdown`,
+`per_request`, `warm_ttft_speedup`.
+
+```bash
+# login-node checks:
+python3 llm/strata/tests/test_warm_probe.py    # stub: cold contract + warm fields + TTFT drop
+llm/strata/warm-cache.sh --plan --model iq3s --cells "1024:1,4096:4"
+llm/strata/warm-cache.sh --self-test
+
+# L40 IQ3_S: C1 at 1k/4k/16k/64k + C4 at 1k/4k (always --nice=100):
+sbatch --nice=100 --nodelist=uk-g6-06 llm/strata/warm-cache.sbatch \
+  --model iq3s --node uk-g6-06 --max-context 131072 \
+  --cells "1024:1,4096:1,16384:1,65536:1,1024:4,4096:4" \
+  --outdir /work/ffa/holecem/strata-runs/2026-10-25-warm/l40x1-iq3s
+
+# V100: override partition/gres/mem and use a <=65536 window.
+sbatch --nice=100 --partition=ffa-gpulab --nodelist=volta05 \
+  --gres=gpu:1 --mem=190G --cpus-per-task=24 \
+  llm/strata/warm-cache.sbatch --model iq3s --node volta05 \
+  --max-context 65536 --cells "1024:1,4096:1,16384:1"
+```
+
+The runner stages the pack once, seeds a private data dir, starts one server
+with the cold recipe (verified from the engine start line), and writes
+`summary.csv`, `cells.jsonl`, `cache-budget.json`, `engine-argv.txt`,
+`engine-facts.txt`, `launch-config.json` and the archived engine logs.
+Measured 2026-10-25: reuse engaged fully (reused = prompt−5, 65,535 of 65,540
+at 64k; 8 GiB/4 slots held four 64k conversations) and warm TTFT was
+0.057–0.150 s on L40 (98× at 64k) and 0.268–0.543 s on V100 (20× at 16k).
+Details in `experiments/2026-10-25-strata-smoke-matrix.md` and
+`/work/ffa/holecem/strata-runs/2026-10-25-warm/NOTES.md`.
+
 ## Gotchas
 
 - **MTP drafter**: on first launch Strata downloads the ~5–6 GB MTP draft
@@ -261,6 +307,14 @@ variant dirs are moved to `*.bak-<ts>` before a retry.
   engine packages look absent on compute nodes).
 - **Parallel cap**: `strata launch --parallel` accepts 1–8; `--batches` is
   clamped to 8.
+- **`--parallel` vs `--set batch`**: passing both is refused
+  (`parallel override conflicts with --batch/--slots`). `--parallel 4` alone
+  is turned into the engine's `--batch 4` by `serve/server.py:parallel_args`.
+- **Shared installed config**: `strata launch` reads and rewrites
+  `STRATA_ROOT/install/strata-<model>.json`; another concurrent launch of the
+  same pack can leave `"mtp": false` there and strip `--mtp`. Pass
+  `--mtp on --set mtp=<private>/mtp/rt` and verify the engine start line, as
+  `warm-cache.sh` does, if the drafter must be present.
 - **Driver floor**: the cuda13 engine needs driver ≥ 580.65 (cuda12 ≥ 575.51);
   Control falls back to cuda12 automatically if older.
 - **Probe padding**: the probe no longer assumes 4 chars/token. It measures
@@ -282,6 +336,16 @@ calibration factor (two-point fit, zero intercept on the stub); the nominal
 that engine logs are archived before scratch cleanup, and that a private data
 dir isolates a mutable `rt/` file from the shared staging tree. Exit 0 on
 success, non-zero otherwise; the stub is killed by the EXIT trap.
+
+`tests/test_warm_probe.py` (2026-10-25, login node) proves the warm mode with
+`tests/stub_server.py --cache-reuse`: the default JSONL key set is exactly the
+pre-warm contract (no `mode`/warm-only fields), `--mode cold` is identical, and
+`--mode warm --warm-repeats 3` emits 4 per-request records (1 cold + 3 warm),
+`reused=0` on repeat 1, `reused=prompt-1` on every repeat, a deterministic
+TTFT drop (stub prefill x 0.2) and `cache_reuse_engaged=true`. The runner's
+`warm-cache.sh --self-test` repeats the check end-to-end through its
+summary.csv/JSONL plumbing. Both exit 0; see
+`/work/ffa/holecem/strata-runs/2026-10-25-warm/{stub-test,runner-self-test}.log`.
 
 `tests/test_fetch_models.sh` (same day): fake `hf`/`sha256sum` + sparse files,
 checks prefixed `IQ3_S/`/`IQ1_M/` paths, exactly one shard-2 download,

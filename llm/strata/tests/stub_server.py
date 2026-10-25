@@ -18,10 +18,18 @@ The synthetic latencies are deterministic so the self-test can assert the
 engine-reported decode rate: completion tokens at exactly TOKEN_DELAY_MS
 each -> decode_tok_s_p50 ~ 1000/TOKEN_DELAY_MS.
 
+`--cache-reuse` (off by default) simulates the engine's prompt cache: a
+byte-identical prompt seen before reports `reused = prompt_tokens-1` in the
+`requests`/`conversation_cache` metrics and its prefill time is multiplied by
+`--warm-prefill-factor`, so a warm-mode probe test sees a deterministic TTFT
+drop on repeats.
+
 Usage: stub_server.py [--port N] [--token-delay-ms 10] [--prefill-ms-per-token 0.025]
+                      [--cache-reuse] [--warm-prefill-factor 0.2]
 Prints "STUB PORT <n>" once listening (port 0 -> OS-chosen).
 """
 import argparse
+import hashlib
 import json
 import sys
 import threading
@@ -29,8 +37,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODEL_ID = "strata-selftest"
-CONFIG = {"token_delay_ms": 10.0, "prefill_ms_per_token": 0.025}
-STATS = {"requests": 0}
+CONFIG = {"token_delay_ms": 10.0, "prefill_ms_per_token": 0.025,
+          "cache_reuse": False, "warm_prefill_factor": 0.2}
+STATS = {"requests": 0, "reused_requests": 0, "reused_tokens": 0,
+         "prompt_tokens": 0, "last_reused": 0, "last_prompt": 0,
+         "cache": {}, "log": []}
 STATS_LOCK = threading.Lock()
 
 
@@ -73,6 +84,25 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/metrics":
             with STATS_LOCK:
                 n = STATS["requests"]
+                cc = {
+                    "enabled": bool(CONFIG["cache_reuse"]),
+                    "budget_mib": 8192,
+                    "slots": 4,
+                    "parked": min(4, len(STATS["cache"])),
+                    "bytes": 0,
+                    "evictions": 0,
+                    "parks": len(STATS["cache"]),
+                    "restores": STATS["reused_requests"],
+                    "last_event": "restored" if STATS["reused_requests"] else "parked",
+                    "last_tokens": STATS["last_prompt"],
+                    "requests": n,
+                    "requests_reused": STATS["reused_requests"],
+                    "reused_tokens": STATS["reused_tokens"],
+                    "prompt_tokens": STATS["prompt_tokens"],
+                    "last_reused": STATS["last_reused"],
+                    "last_prompt": STATS["last_prompt"],
+                }
+                log = list(STATS["log"][:32])
             self._send_json(200, {
                 "vllm:num_requests_running": 0,
                 "vllm:num_requests_waiting": 0,
@@ -84,6 +114,8 @@ class Handler(BaseHTTPRequestHandler):
                 "kv_cache_tokens": 1024 * n,
                 "gpu_utilization": 0.7,
                 "ram_used_bytes": 12 * 1024 ** 3,
+                "conversation_cache": cc,
+                "requests": log,
             })
         else:
             self._send_json(404, {"error": {"message": "no route %s" % path}})
@@ -111,12 +143,41 @@ class Handler(BaseHTTPRequestHandler):
 
         with STATS_LOCK:
             STATS["requests"] += 1
-        cid = "chatcmpl-stub-%d" % STATS["requests"]
+            n = STATS["requests"]
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            reused = 0
+            if CONFIG["cache_reuse"]:
+                seen = STATS["cache"].get(digest)
+                if seen is not None:
+                    reused = max(1, prompt_tokens - 1)
+                    STATS["cache"][digest] = seen + 1
+                    STATS["reused_requests"] += 1
+                    STATS["reused_tokens"] += reused
+                else:
+                    STATS["cache"][digest] = 1
+            STATS["prompt_tokens"] += prompt_tokens
+            STATS["last_reused"] = reused
+            STATS["last_prompt"] = prompt_tokens
+        cid = "chatcmpl-stub-%d" % n
         prompt_ms = prompt_tokens * CONFIG["prefill_ms_per_token"]
+        if reused:
+            prompt_ms *= CONFIG["warm_prefill_factor"]
         predicted_ms = completion_tokens * CONFIG["token_delay_ms"]
         usage = {"prompt_tokens": prompt_tokens,
                  "completion_tokens": completion_tokens,
                  "total_tokens": prompt_tokens + completion_tokens}
+        with STATS_LOCK:
+            # newest first, like the real engine's `requests` list
+            STATS["log"].insert(0, {
+                "id": "stubreq-%d" % n, "time": time.time(),
+                "duration_s": 0.0, "finish": "length",
+                "prompt_tokens": prompt_tokens, "reused": reused,
+                "output_tokens": completion_tokens,
+                "prompt_ms": prompt_ms,
+                "decode_ms": predicted_ms,
+                "decode_tok_s": 1000.0 / CONFIG["token_delay_ms"],
+            })
+            del STATS["log"][32:]
 
         if not stream:
             time.sleep(min(prompt_ms, 500) / 1000.0)
@@ -160,9 +221,17 @@ def main():
     ap.add_argument("--token-delay-ms", type=float, default=10.0, dest="token_delay_ms")
     ap.add_argument("--prefill-ms-per-token", type=float, default=0.025,
                     dest="prefill_ms_per_token")
+    ap.add_argument("--cache-reuse", action="store_true",
+                    help="simulate a prompt cache: a repeated prompt has "
+                         "reused=prompt_tokens-1 and prefill reduced by "
+                         "--warm-prefill-factor (off by default)")
+    ap.add_argument("--warm-prefill-factor", type=float, default=0.2,
+                    dest="warm_prefill_factor")
     args = ap.parse_args()
     CONFIG["token_delay_ms"] = args.token_delay_ms
     CONFIG["prefill_ms_per_token"] = args.prefill_ms_per_token
+    CONFIG["cache_reuse"] = bool(args.cache_reuse)
+    CONFIG["warm_prefill_factor"] = args.warm_prefill_factor
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     httpd.daemon_threads = True

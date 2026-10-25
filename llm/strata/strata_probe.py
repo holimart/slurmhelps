@@ -30,6 +30,17 @@ Usage:
       --context 4096 --concurrency 4 --max-tokens 128 \
       --requests-per-slot 3 --json-out cell.jsonl
 
+Warm-cache mode (opt-in; cold stays the default and its JSONL is unchanged):
+  strata_probe.py ... --mode warm --warm-repeats 3 --json-out cell.jsonl
+
+In warm mode each slot sends one saltless prompt, then repeats the SAME
+prompt --warm-repeats times.  The per-request lines record TTFT and the
+engine's `reused` prompt tokens; the cell adds ttft_cold_s,
+ttft_warm_s_p50/p95, reused_tokens_p50, ttft speedup and the engine's
+conversation_cache block/budget.  Repeat 1 can itself hit a checkpoint left
+by a previous cell with the same context (the prompt is deterministic), so
+its reuse is reported rather than assumed zero.
+
 Patterned after /work/ffa/holecem/scratch-claude/qwen_smoke.py (read-only).
 """
 import argparse
@@ -79,6 +90,35 @@ def build_prompt(context, salt, chars_per_token=DEFAULT_CHARS_PER_TOKEN,
     return build_filler(max(1.0, chars), salt, context)
 
 
+def build_warm_filler(target_chars, context, slot):
+    """Saltless filler for the warm mode.
+
+    The prompt carries only a deterministic slot marker, never a random salt:
+    every repeat of a slot therefore sends byte-identical messages, which is
+    what the engine's prompt/conversation cache keys on.  The slot number
+    keeps concurrent slots distinct (with C>1 an identical prompt in four
+    slots would be read once and reused by the others, destroying the cold
+    reference); a C=1 cell reuses the slot-0 prompt of an earlier C=1 cell,
+    which is intentional and reported as a possible first-repeat hit."""
+    target_chars = max(1, int(target_chars))
+    head = "[strata-probe warm slot=%d ctx=%d]\n" % (slot, context)
+    parts = [head]
+    n = 0
+    have = len(head)
+    while have < target_chars:
+        line = "record%06d: %s.\n" % (n, FILLER_WORDS)
+        parts.append(line)
+        have += len(line)
+        n += 1
+    return "".join(parts)
+
+
+def build_warm_prompt(context, slot, chars_per_token=DEFAULT_CHARS_PER_TOKEN,
+                      intercept_tokens=0.0):
+    chars = (float(context) - float(intercept_tokens)) * float(chars_per_token)
+    return build_warm_filler(max(1.0, chars), context, slot)
+
+
 def percentile(values, q):
     """Nearest-rank percentile; None on empty."""
     if not values:
@@ -115,12 +155,16 @@ METRIC_KEEP = ("expert", "vllm", "strata", "gpu", "ram", "cache", "slot",
                "kv", "memory")
 
 
-def metrics_digest(base_root, timeout):
-    """GET /metrics (Strata answers JSON; vLLM names under vllm:*)."""
+def metrics_raw(base_root, timeout):
+    """GET /metrics and return the raw dict, or None (best effort)."""
     try:
         raw = api_get_json(base_root.rstrip("/") + "/metrics", timeout)
-    except Exception as exc:  # noqa: BLE001 - metrics are best-effort
-        return {"error": "%s: %s" % (type(exc).__name__, exc)}
+    except Exception:  # noqa: BLE001 - metrics are best-effort
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def metrics_digest_from_raw(raw):
     if not isinstance(raw, dict):
         return {"error": "unexpected /metrics payload %s" % type(raw).__name__}
     out = {"_keys": sorted(str(k) for k in raw)[:60]}
@@ -129,6 +173,61 @@ def metrics_digest(base_root, timeout):
         if any(t in low for t in METRIC_KEEP):
             out[str(key)] = summarize(val)
     return out
+
+
+def metrics_digest(base_root, timeout):
+    """GET /metrics (Strata answers JSON; vLLM names under vllm:*)."""
+    try:
+        raw = api_get_json(base_root.rstrip("/") + "/metrics", timeout)
+    except Exception as exc:  # noqa: BLE001 - metrics are best-effort
+        return {"error": "%s: %s" % (type(exc).__name__, exc)}
+    if not isinstance(raw, dict):
+        return {"error": "unexpected /metrics payload %s" % type(raw).__name__}
+    return metrics_digest_from_raw(raw)
+
+
+def conversation_cache_of(raw):
+    """The engine's conversation_cache block (scalars only), or None."""
+    if not isinstance(raw, dict):
+        return None
+    cc = raw.get("conversation_cache")
+    if not isinstance(cc, dict):
+        return None
+    return summarize(cc, 0)
+
+
+def metric_int(block, key):
+    if not isinstance(block, dict):
+        return None
+    val = block.get(key)
+    return val if isinstance(val, int) else None
+
+
+def claim_engine_request(raw, seen_times, lock):
+    """Claim one not-yet-seen entry from the engine's `requests` list.
+
+    Strata appends each finished request with `time`, `prompt_tokens`,
+    `reused` and `prompt_ms`.  At C=1 the newest unclaimed entry is exactly
+    the request that just finished.  With concurrent slots the entries can be
+    claimed out of order; the cell-level conversation_cache counters are then
+    the authoritative reuse number and the per-request value is best effort.
+    """
+    if not isinstance(raw, dict):
+        return None
+    entries = raw.get("requests")
+    if not isinstance(entries, list):
+        return None
+    with lock:
+        fresh = [e for e in entries
+                 if isinstance(e, dict) and e.get("time") not in seen_times]
+        if not fresh:
+            return None
+        entry = max(fresh, key=lambda e: e.get("time") or 0)
+        seen_times.add(entry.get("time"))
+    return {"reused": entry.get("reused"),
+            "prompt_tokens": entry.get("prompt_tokens"),
+            "prompt_ms": entry.get("prompt_ms"),
+            "time": entry.get("time")}
 
 
 def chat_root(base_url):
@@ -329,6 +428,118 @@ def worker(out, lock, base, model, context, prompt_tokens, chars_per_token,
             out.append(rec)
 
 
+def warm_worker(out, lock, base, model, root, context, prompt_tokens,
+                chars_per_token, intercept_tokens, max_tokens, temperature,
+                timeout, warm_repeats, metrics_timeout, slot, seen_times):
+    """One cold (saltless) request, then `warm_repeats` identical ones.
+
+    Per-request engine reuse is read from /metrics after each stream.  The
+    prompt has no random salt, so repeat 2..N hit whatever prefix the engine
+    kept from repeat 1 (prompt/conversation cache)."""
+    prompt = build_warm_prompt(prompt_tokens, slot, chars_per_token,
+                               intercept_tokens)
+    for i in range(1 + warm_repeats):
+        rec = stream_one(base, model, prompt, max_tokens, temperature, timeout)
+        rec["slot"] = slot
+        rec["seq"] = i
+        rec["request_index"] = i + 1      # 1 = initial cold, 2.. = warm
+        rec["repeat"] = i + 1
+        rec["warm"] = i > 0
+        rec["saltless"] = True
+        raw = metrics_raw(root, metrics_timeout)
+        claim = claim_engine_request(raw, seen_times, lock) if raw else None
+        if claim:
+            rec["reused_tokens"] = claim.get("reused")
+            rec["engine_prompt_tokens"] = claim.get("prompt_tokens")
+            rec["engine_prompt_ms"] = claim.get("prompt_ms")
+        else:
+            rec["reused_tokens"] = None
+            rec["engine_prompt_tokens"] = None
+            rec["engine_prompt_ms"] = None
+        with lock:
+            out.append(rec)
+
+
+def warm_cell_fields(results, ok, cc_before, cc_after, warm_repeats):
+    """Extra JSONL fields for --mode warm (never emitted in cold mode)."""
+    def nums(rows, key):
+        return [r[key] for r in rows
+                if isinstance(r.get(key), (int, float))]
+
+    cold_rows = [r for r in ok if r.get("request_index") == 1]
+    warm_rows = [r for r in ok if r.get("request_index", 0) >= 2]
+    cold_ttft = nums(cold_rows, "ttft_s")
+    warm_ttft = nums(warm_rows, "ttft_s")
+    warm_reuse = nums(warm_rows, "reused_tokens")
+
+    by_repeat = []
+    for idx in range(1, 1 + warm_repeats + 1):
+        rows = [r for r in ok if r.get("request_index") == idx]
+        by_repeat.append({
+            "repeat": idx,
+            "role": "cold" if idx == 1 else "warm",
+            "requests": len(rows),
+            "ttft_s_p50": percentile(nums(rows, "ttft_s"), 0.50),
+            "ttft_s_p95": percentile(nums(rows, "ttft_s"), 0.95),
+            "reused_tokens_p50": percentile(nums(rows, "reused_tokens"), 0.50),
+        })
+
+    before_reused = metric_int(cc_before, "reused_tokens")
+    after_reused = metric_int(cc_after, "reused_tokens")
+    before_reqs = metric_int(cc_before, "requests_reused")
+    after_reqs = metric_int(cc_after, "requests_reused")
+    reused_total = None
+    if before_reused is not None and after_reused is not None:
+        reused_total = after_reused - before_reused
+    requests_reused_total = None
+    if before_reqs is not None and after_reqs is not None:
+        requests_reused_total = after_reqs - before_reqs
+
+    cold_p50 = percentile(cold_ttft, 0.50)
+    warm_p50 = percentile(warm_ttft, 0.50)
+    speedup = None
+    if cold_p50 and warm_p50:
+        speedup = cold_p50 / warm_p50
+
+    per_request = []
+    for r in sorted(results, key=lambda x: (x.get("slot", 0),
+                                            x.get("request_index", 0))):
+        per_request.append({
+            "request_index": r.get("request_index"),
+            "slot": r.get("slot"),
+            "ttft_s": r.get("ttft_s"),
+            "prompt_tokens": r.get("prompt_tokens"),
+            "reused_tokens": r.get("reused_tokens"),
+            "engine_prompt_tokens": r.get("engine_prompt_tokens"),
+            "engine_prompt_ms": r.get("engine_prompt_ms"),
+            "prefill_tok_s": r.get("prefill_tok_s"),
+            "ok": r.get("ok"),
+            "error": r.get("error"),
+        })
+
+    return {
+        "mode": "warm",
+        "warm_repeats": warm_repeats,
+        "total_requests_per_slot": 1 + warm_repeats,
+        "ttft_cold_s": cold_p50,
+        "ttft_cold_s_p95": percentile(cold_ttft, 0.95),
+        "ttft_warm_s_p50": warm_p50,
+        "ttft_warm_s_p95": percentile(warm_ttft, 0.95),
+        "warm_ttft_speedup": speedup,
+        "reused_tokens_p50": percentile(warm_reuse, 0.50),
+        "reused_tokens_total": reused_total,
+        "requests_reused_total": requests_reused_total,
+        "cache_reuse_engaged": bool((reused_total or 0) > 0
+                                    or (requests_reused_total or 0) > 0),
+        "conversation_cache_before": cc_before,
+        "conversation_cache_after": cc_after,
+        "conversation_cache_budget_mib": metric_int(cc_after, "budget_mib"),
+        "conversation_cache_slots": metric_int(cc_after, "slots"),
+        "repeat_breakdown": by_repeat,
+        "per_request": per_request,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="OpenAI streaming benchmark probe")
     ap.add_argument("--base-url", required=True,
@@ -349,7 +560,17 @@ def main():
     ap.add_argument("--timeout", type=float, default=1800.0,
                     help="per-request wall-clock timeout (protocol default 1800 s)")
     ap.add_argument("--metrics-timeout", type=float, default=15.0)
+    ap.add_argument("--mode", choices=("cold", "warm"), default="cold",
+                    help="cold (default): random-salt prompts, every request a "
+                         "full prefill; warm: one saltless cold request followed "
+                         "by --warm-repeats identical ones so prompt/conversation "
+                         "cache reuse is measured")
+    ap.add_argument("--warm-repeats", type=int, default=3,
+                    help="warm repeats after the initial saltless request "
+                         "(default 3; total requests per slot = 1 + N)")
     args = ap.parse_args()
+    if args.warm_repeats < 1:
+        ap.error("--warm-repeats must be >= 1")
 
     base = chat_root(args.base_url)
     root = host_root(args.base_url)
@@ -377,19 +598,41 @@ def main():
 
     # Calibration runs before this snapshot, so it does not pollute the cell's
     # expert-cache / request metrics.
-    metrics_before = metrics_digest(root, args.metrics_timeout)
+    warm = args.mode == "warm"
+    seen_times = set()
+    cc_before = None
+    if warm:
+        raw_before = metrics_raw(root, args.metrics_timeout)
+        metrics_before = (metrics_digest_from_raw(raw_before) if raw_before is not None
+                          else {"error": "metrics unavailable"})
+        cc_before = conversation_cache_of(raw_before)
+        if raw_before is not None:
+            for entry in raw_before.get("requests") or []:
+                if isinstance(entry, dict):
+                    seen_times.add(entry.get("time"))
+    else:
+        metrics_before = metrics_digest(root, args.metrics_timeout)
 
     results = []
     lock = threading.Lock()
     threads = []
     t_start = time.monotonic()
     for slot in range(args.concurrency):
-        th = threading.Thread(target=worker,
-                              args=(results, lock, base, args.model, args.context,
-                                    prompt_tokens, calibration["chars_per_token"],
-                                    calibration.get("intercept_tokens", 0.0),
-                                    args.max_tokens, args.temperature,
-                                    args.timeout, args.rps, slot))
+        if warm:
+            th = threading.Thread(target=warm_worker,
+                                  args=(results, lock, base, args.model, root, args.context,
+                                        prompt_tokens, calibration["chars_per_token"],
+                                        calibration.get("intercept_tokens", 0.0),
+                                        args.max_tokens, args.temperature,
+                                        args.timeout, args.warm_repeats,
+                                        args.metrics_timeout, slot, seen_times))
+        else:
+            th = threading.Thread(target=worker,
+                                  args=(results, lock, base, args.model, args.context,
+                                        prompt_tokens, calibration["chars_per_token"],
+                                        calibration.get("intercept_tokens", 0.0),
+                                        args.max_tokens, args.temperature,
+                                        args.timeout, args.rps, slot))
         th.daemon = True
         threads.append(th)
     for th in threads:
@@ -419,6 +662,17 @@ def main():
         err = "all %d requests failed (first: %s)" % (len(failed), first_err)
     elif failed:
         err = None  # partial success is still a valid cell; counts are kept
+    if warm and ok and not any(r.get("request_index", 0) >= 2 for r in ok):
+        err = "no warm repeat succeeded"
+
+    if warm:
+        raw_after = metrics_raw(root, args.metrics_timeout)
+        metrics_after = (metrics_digest_from_raw(raw_after) if raw_after is not None
+                         else {"error": "metrics unavailable"})
+        cc_after = conversation_cache_of(raw_after)
+    else:
+        metrics_after = metrics_digest(root, args.metrics_timeout)
+        cc_after = None
 
     line = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -433,7 +687,7 @@ def main():
         "ttft_s_p95": percentile(ttft_samples, 0.95),
         "completion_tokens": total_completion,
         "prompt_tokens": total_prompt,
-        "engine_metrics": {"before": metrics_before, "after": metrics_digest(root, args.metrics_timeout)},
+        "engine_metrics": {"before": metrics_before, "after": metrics_after},
         "error": err,
         # extras (diagnostics beyond the agreed cell contract):
         "requests_ok": len(ok),
@@ -449,6 +703,9 @@ def main():
         "pad_safety": args.pad_safety,
         "calibration": calibration,
     }
+    if warm:
+        line.update(warm_cell_fields(results, ok, cc_before, cc_after,
+                                     args.warm_repeats))
 
     with open(args.json_out, "a") as fh:
         fh.write(json.dumps(line) + "\n")
@@ -462,6 +719,15 @@ def main():
              "%.3f" % line["ttft_s_p50"] if line["ttft_s_p50"] else "-",
              calibration["chars_per_token"],
              calibration.get("intercept_tokens", 0.0), args.json_out))
+    if warm:
+        print("[strata-probe] warm ctx=%d C=%d cold=%s warm p50=%s p95=%s "
+              "reused p50=%s engaged=%s -> %s"
+              % (args.context, args.concurrency,
+                 "%.3f" % line["ttft_cold_s"] if line.get("ttft_cold_s") else "-",
+                 "%.3f" % line["ttft_warm_s_p50"] if line.get("ttft_warm_s_p50") else "-",
+                 "%.3f" % line["ttft_warm_s_p95"] if line.get("ttft_warm_s_p95") else "-",
+                 line.get("reused_tokens_p50"),
+                 line.get("cache_reuse_engaged"), args.json_out))
     if err:
         print("[strata-probe] error: %s" % err, file=sys.stderr)
         sys.exit(1)

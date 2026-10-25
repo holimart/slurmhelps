@@ -320,6 +320,101 @@ Supplementary 128K-class cells (nominal 114000 = 129,781 real tokens):
 | 65536 | 2 | — | — | — | — | — | fail |
 | 65536 | 4 | — | — | — | — | — | fail |
 
+## Warm vs cold cache — prompt-cache reuse (2026-10-25)
+
+`strata_probe.py` gained an opt-in warm mode (`--mode warm --warm-repeats 3`,
+default remains cold) and `warm-cache.sh` / `warm-cache.sbatch` rerun the
+baseline recipe with it. Each slot sends **one saltless prompt** and then
+**3 byte-identical repeats**; repeat 1 is the cold reference (recorded, not a
+rerun of a stored cold cell), repeats 2-4 are warm. Every request records
+client TTFT plus the engine's `reused` prompt tokens; each cell records the
+engine `conversation_cache` block, `reused_tokens_p50`, `ttft_cold_s`,
+`ttft_warm_s_p50/p95` and the speedup. The cold cells above were **not**
+rerun.
+
+Provenance: jobs `38237007` (L40 IQ3_S, `uk-g6-06`, 4m52s),
+`38237008` (L40 Coder, `uk-g6-08`, 8m42s), `38237009` (V100 IQ3_S,
+`volta05`, 6m22s; `volta04` is DOWN). One server per pack, the exact cold
+engine argv was verified from the engine start line:
+`--kv int8 --kv-resident 32768 --expert-cache auto --prefill auto --ple-io ram
+--spec 4 --spec-min-p 0.5 --mtp <private>/mtp/rt --batch 4` (cuda13 on L40,
+cuda12 on V100). Engine log: conversation cache **8192 MiB for up to 4 parked
+conversations**.
+
+`cold stored` is the matching `ttft_s_p50` from the tables above. Those rows
+used the pre-calibration probe, so their real prompts were larger (nominal
+1024/4096/16384/65536 carried ~1,254/4,726/18,708/74,632 tokens); the warm
+run's calibrated prompts carried 1,028/4,097/16,405/65,540. `cold repeat-1`
+is therefore the apples-to-apples same-prompt baseline; `speedup r1/warm` is
+the honest cache benefit, `speedup stored/warm` also includes the old prompt
+overshoot.
+
+### l40x1 — IQ3_S (1× L40S 48 GB)
+
+| ctx | C | cold stored (s) | cold repeat-1 (s) | warm p50 (s) | warm p95 (s) | reused tokens p50 | speedup r1/warm | speedup stored/warm |
+|---:|--:|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 1 | 0.92 | 0.67 | 0.057 | 0.057 | 1,023 | 11.8× | 16.1× |
+| 4096 | 1 | 1.40 | 1.25 | 0.064 | 0.065 | 4,092 | 19.4× | 21.7× |
+| 16384 | 1 | 4.72 | 4.32 | 0.082 | 0.085 | 16,369 | 52.8× | 57.7× |
+| 65536 | 1 | 17.39 | 14.74 | 0.150 | 0.182 | 65,535 | 98.2× | 115.9× |
+| 1024 | 4 | 1.85 | 1.37 | 0.080 | 0.152 | 1,023 | 17.3× | 23.3× |
+| 4096 | 4 | 2.81 | 2.51 | 0.080 | 0.169 | 4,092 | 31.3× | 35.0× |
+
+### l40x1 — Coder IQ1_M (1× L40S 48 GB)
+
+| ctx | C | cold stored (s) | cold repeat-1 (s) | warm p50 (s) | warm p95 (s) | reused tokens p50 | speedup r1/warm | speedup stored/warm |
+|---:|--:|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 1 | 0.56 | 0.46 | 0.056 | 0.058 | 1,023 | 8.3× | 10.1× |
+| 4096 | 1 | 1.21 | 1.04 | 0.059 | 0.062 | 4,092 | 17.7× | 20.6× |
+| 16384 | 1 | 4.39 | 3.71 | 0.091 | 0.091 | 16,400 | 40.9× | 48.3× |
+| 65536 | 1 | 16.19 | 13.80 | 0.151 | 0.183 | 65,535 | 91.2× | 107.1× |
+| 1024 | 4 | 1.15 | 0.98 | 0.094 | 0.189 | 1,023 | 10.4× | 12.2× |
+| 4096 | 4 | 2.44 | 2.15 | 0.100 | 0.210 | 4,092 | 21.6× | 24.5× |
+
+### v100x1 — IQ3_S (1× V100-SXM2-32GB)
+
+| ctx | C | cold stored (s) | cold repeat-1 (s) | warm p50 (s) | warm p95 (s) | reused tokens p50 | speedup r1/warm | speedup stored/warm |
+|---:|--:|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 1 | 2.86 | 2.40 | 0.268 | 0.269 | 1,023 | 9.0× | 10.7× |
+| 4096 | 1 | 3.72 | 3.42 | 0.253 | 0.255 | 4,092 | 13.5× | 14.7× |
+| 16384 | 1 | 13.52 | 10.86 | 0.543 | 0.543 | 16,400 | 20.0× | 24.9× |
+
+### What the warm numbers say
+
+- **Reuse does engage, fully.** Every warm repeat reported
+  `reused = prompt_tokens - 5` (the chat-template tail): 1,023 at 1k, 4,092
+  at 4k, 16,369-16,400 at 16k, 65,535 at 64k.
+  `conversation_cache.requests_reused` counted exactly the 3 warm repeats per
+  slot and `reused_tokens` grew by 3 x prompt per C1 cell. `restores` stayed
+  0: the hits came from the prompt checkpoint path, not a parked-conversation
+  slot restore, and every request still `parked` (parks 6/12/18/24 through
+  the C1 ladder).
+- **The 8 GiB / 4-slot budget did not reject long prompts.** At 64k the cache
+  held 4 parked conversations in 2.6-2.7 GiB; evictions only accumulated as
+  older ladder cells aged out (3/6/9 at 4k/16k/64k, 15/21 in the C4 cells).
+  No engine warning about an oversized conversation appeared.
+- **Repeat 1 was cold in every cell** (`reused=0`): the deterministic prompt of
+  an earlier cell had already been evicted by the 4-slot cache, so no
+  cross-cell checkpoint contaminated the cold reference (including C4 slot 0).
+- **Where it pays:** multi-turn/agent loops that extend a stable history turn
+  after turn. TTFT collapses to the checkpoint-restore cost, which grows only
+  mildly with context: L40 0.057 -> 0.150 s from 1k to 64k (98× at 64k);
+  V100 0.268 -> 0.543 s from 1k to 16k (20× at 16k). At C4 the warm p50 is
+  still 0.080-0.100 s, but the p95 tail doubles (0.15-0.21 s L40) as four
+  slots restore together.
+- **Where it does not:** the first turn of a new conversation, any prompt
+  whose prefix or final-turn boundary differs from a checkpoint, and more
+  than four alternating long conversations (the bounded cache evicts the
+  oldest). Very short prompts gain least in relative terms, but still save
+  ~0.6 s (L40) / ~2.1 s (V100) per turn at 1k.
+- Warm decode is **not** comparable to the cold decode tables: C4 warm
+  repeats skip prefill contention, so L40 IQ3_S C4 1k reads 44.7 tok/s vs
+  28.0 cold. C1 decode is within host/engine variance (125-142 tok/s L40).
+- The cache benefit is per-server and per-recipe; changing the system prompt,
+  `--kv`, `--context`, or restarting drops the parked state. Production
+  harnesses should keep one warm server per worker and reuse the exact
+  message prefix, not re-send a differently-stamped system prompt.
+
 ## Failed cells — actual strings and causes
 
 ### L40 131072 × C 1/2/4 (12 cells: 2 packs × 3 C × 2 L40 configs)
