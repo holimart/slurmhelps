@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
     --verify) VERIFY=1; shift ;;
     --with-mmproj) WITH_MMPROJ=1; shift ;;
     --submit) SUBMIT=1; shift ;;
-    -h|--help) sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "fetch-models: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
