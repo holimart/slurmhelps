@@ -700,9 +700,14 @@ run_variant() { # variant
     return 0
   fi
 
-  # fresh engine-log state per variant keeps the archived logs unambiguous
+  # fresh engine-log state AND a fresh profile/config per variant: launch-level
+  # choices (notably --mtp off) are written into the model's saved settings and
+  # would otherwise leak into the next variant.  The runtime dir stays shared so
+  # `launch --stop` can always find this job's server.
   export XDG_STATE_HOME="$JOB_LOCAL/state/$v"
-  mkdir -p "$XDG_STATE_HOME"
+  export STRATA_PROFILE_DIR="$JOB_LOCAL/profile/$v"
+  export XDG_CONFIG_HOME="$JOB_LOCAL/config/$v"
+  mkdir -p "$XDG_STATE_HOME" "$STRATA_PROFILE_DIR" "$XDG_CONFIG_HOME"
   clear_variant_env
   VAR_RESTARTS=0
 
