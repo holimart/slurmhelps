@@ -68,7 +68,10 @@
 #                 launch-fail with the real error
 #   mtpoff        `strata launch --mtp off` (no draft layer at all; --spec 4
 #                 stays in the config because the native pack requires it) —
-#                 the workable "no drafts" arm
+#                 the workable "no drafts" arm.  Every other variant passes
+#                 `--mtp on` explicitly: the choice is persisted in the shared
+#                 installed config, so leaving it implicit inherits the
+#                 previous variant's off switch.
 #   spec_pure     --spec 4 --spec-min-p 0 (extend every verify window)
 #   kvbf16        SKIPPED: engine 0.1.50 only has --kv fp16|int8|q4_0|k8v4;
 #                 `--kv bf16` answers "--kv must be fp16, int8, q4_0 or k8v4"
@@ -231,10 +234,14 @@ variant_set_flags() {
   esac
 }
 variant_launch_flags() {
-  # launch-level flags (not engine --set): only --mtp off needs one
+  # Launch-level flags.  --mtp is ALWAYS explicit: `strata launch` persists the
+  # choice into the shared installed config (install/strata-<tag>.json), and a
+  # variant that leaves it implicit inherits the previous variant's choice
+  # (`--mtp off` then silently disabled the drafter for the next variant:
+  # "+0 MiB for the draft head", "drafts accepted 0 of 0").
   case "$1" in
     mtpoff) printf '%s' "--mtp off" ;;
-    *) printf '' ;;
+    *) printf '%s' "--mtp on" ;;
   esac
 }
 variant_all_flags() { printf '%s %s' "$(variant_launch_flags "$1")" "$(variant_set_flags "$1")" | sed 's/^ *//;s/ *$//'; }

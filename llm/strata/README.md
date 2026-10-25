@@ -206,10 +206,11 @@ MiB free and the engine warns about #2065 paging). `kvbf16` and
 The pack is staged to node-local scratch **once** per job; each variant seeds a
 private `--data-dir` from `_strata-data` (hardlinked read-only trees, copied
 `mtp/rt`) and starts its own headless server at the baseline server window
-(`--max-context 131072`, so `--kv-resident` still streams). Each variant also
-gets its own launch profile: launch-level choices (notably `--mtp off`) are
-persisted in the model's saved settings and would otherwise leak into the next
-variant. Output:
+(`--max-context 131072`, so `--kv-resident` still streams). Every variant
+passes `--mtp on` explicitly (except `mtpoff`): `strata launch` persists that
+choice in the shared installed config, so a variant that left it implicit
+would inherit the previous variant's `--mtp off` and silently run without a
+drafter. Each variant also gets its own launch profile. Output:
 
 ```text
 $OUTDIR/knobs.csv                     variant,ctx,concurrency,decode_p50,
