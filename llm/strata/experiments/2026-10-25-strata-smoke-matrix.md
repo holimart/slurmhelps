@@ -513,8 +513,9 @@ passes 4/4 stub cells (decode exactly 100 tok/s, aggregate doubles C1→C2),
 records calibration 4.007 chars/token, clamps the nominal 1024 cell to 864
 prompt tokens, archives a fake engine log, and verifies that a private `rt/`
 write does not touch the shared tree. `tests/test_fetch_models.sh` passes with
-a fake `hf`: prefixed paths, exactly one shard-2 download, hardlinks into both
-packs, exact sizes, and a loud failure when `hf` creates nothing.
+fake `hf`/`sha256sum`: prefixed paths, exactly one shard-2 download, hardlinks
+into both packs, exact sizes, a clean `--verify` audit, and a loud failure when
+`hf` creates nothing.
 
 ## Gotchas / caveats
 

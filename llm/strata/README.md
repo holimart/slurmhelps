@@ -227,7 +227,8 @@ that engine logs are archived before scratch cleanup, and that a private data
 dir isolates a mutable `rt/` file from the shared staging tree. Exit 0 on
 success, non-zero otherwise; the stub is killed by the EXIT trap.
 
-`tests/test_fetch_models.sh` (same day): fake `hf` + sparse files, checks
-prefixed `IQ3_S/`/`IQ1_M/` paths, exactly one shard-2 download, hardlinks into
-both pack dirs, exact sizes, and a loud failure when `hf` exits 0 but creates
-nothing. No network, no real model data.
+`tests/test_fetch_models.sh` (same day): fake `hf`/`sha256sum` + sparse files,
+checks prefixed `IQ3_S/`/`IQ1_M/` paths, exactly one shard-2 download,
+hardlinks into both pack dirs, exact sizes, a clean `--verify` audit, and a
+loud failure when `hf` exits 0 but creates nothing. No network, no real model
+data.

@@ -49,6 +49,19 @@ truncate -s "$size" "$local_dir/$hub"
 STUB
 chmod +x "$bin/hf"
 
+cat > "$bin/sha256sum" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${1##*/}" in
+  *IQ3_S-00001-of-00002.gguf) echo "4c1eb2ceb4915e1192f4f386021897bde56a97f40a0bb78bb86465e0f7d2aca3  $1" ;;
+  *IQ3_S-00002-of-00002.gguf) echo "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113  $1" ;;
+  *IQ1_M-00001-of-00002.gguf) echo "e11083ba855e7666b48ea3f2db6a9c3a20c18751a012cc24f948de91b7087fad  $1" ;;
+  *IQ1_M-00002-of-00002.gguf) echo "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113  $1" ;;
+  *) exit 1 ;;
+esac
+STUB
+chmod +x "$bin/sha256sum"
+
 size() { stat -c %s "$1" 2>/dev/null || echo 0; }
 inode() { stat -c %i "$1"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -84,6 +97,13 @@ shared=$models/_shared/Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 [ "$(inode "$shared")" = "$(inode "$models/coder/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf")" ] \
   || fail "Coder shard 2 is not hardlinked to _shared"
 
+# Read-only audit still sees both flat pack copies (fake sha256sum: no 114 GB hash).
+PATH="$bin:$PATH" MODELS_ROOT="$models" LOG_DIR="$logdir" \
+  "$fetch" --verify >"$root/verify.out" 2>&1 \
+  || fail "fetch-models --verify failed: $(tail -5 "$root/verify.out")"
+grep -q 'audit complete: missing=0 corrupt=0' "$root/verify.out" \
+  || fail "verify did not report a clean audit"
+
 # A fake hf that exits 0 without creating the file must fail loudly.
 root2=$root/noop
 mkdir -p "$root2"
@@ -95,4 +115,4 @@ fi
 grep -q 'does not exist' "$root2/out.txt" \
   || fail "missing-file failure did not explain the missing prefixed path"
 
-echo "test_fetch_models: PASS (prefixed paths, one shard-2 download, hardlinks, loud failure)"
+echo "test_fetch_models: PASS (prefixed paths, one shard-2 download, hardlinks, clean audit, loud failure)"
