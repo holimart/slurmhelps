@@ -151,6 +151,8 @@ def cmd_up(args: argparse.Namespace) -> int:
         str(cfg.max_num_seqs),
         "--max-num-batched-tokens",
         str(cfg.max_num_batched_tokens),
+        "--startup-timeout",
+        str(cfg.startup_timeout_s),
         "--",
         *backend,
     ]

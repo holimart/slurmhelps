@@ -48,6 +48,7 @@ _SERVING_FIELDS = {
     "max_model_len",
     "max_num_seqs",
     "max_num_batched_tokens",
+    "startup_timeout_s",
     "gpu_memory_utilization",
     "kv_cache_dtype",
     "block_size",
@@ -133,6 +134,8 @@ class ServingConfig:
     max_model_len: int = 786_432
     max_num_seqs: int = 32
     max_num_batched_tokens: int = 8_192
+    # Seconds the worker waits for /health before failing the job (weights + kernel prep).
+    startup_timeout_s: int = 3_600
     gpu_memory_utilization: float = 0.94
     kv_cache_dtype: str = "bfloat16"
     block_size: int = 128
@@ -276,6 +279,7 @@ class ServingConfig:
         self.max_num_batched_tokens = _as_int(
             "max_num_batched_tokens", self.max_num_batched_tokens, minimum=1
         )
+        self.startup_timeout_s = _as_int("startup_timeout_s", self.startup_timeout_s, minimum=60)
         self.block_size = _as_int("block_size", self.block_size, minimum=1)
         self.host_kv_ram_gib = _as_int("host_kv_ram_gib", self.host_kv_ram_gib, minimum=0)
         self.queue_limit = _as_int("queue_limit", self.queue_limit, minimum=0)
