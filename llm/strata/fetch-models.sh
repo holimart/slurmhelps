@@ -89,6 +89,12 @@ hf_bin() {
   else echo "fetch-models: neither hf nor huggingface-cli on PATH" >&2; exit 3; fi
 }
 
+# Hub revisions pinned at download time (2026-09-29); the Coder repo's main was
+# later re-uploaded, so a bare fetch would silently pick a different shard.
+REV_IQ3S=ed59f92082b1e93c0e96d60a8b11aab089b52f09
+REV_CODER=5348543e0147355ac9cbcb031184a3546350988e
+revision_for() { case "$1" in *Coder-GGUF) echo "$REV_CODER" ;; *) echo "$REV_IQ3S" ;; esac; }
+
 # repo hub_path expected_bytes expected_sha256 — values from
 # /work/ffa/holecem/src/Strata/setup.py (HF_REVISIONS pinned 2026-09-29).
 # hub_path includes the IQ3_S/ or IQ1_M/ repository subdirectory.
@@ -130,11 +136,12 @@ link_or_copy() { # src dst label
 # Download one Hub file (prefixed path) to dest, resuming into the pack dir.
 download_hub_file() { # repo sub hub_path dest want_size
   local repo=$1 sub=$2 hub_path=$3 dest=$4 want_size=$5
-  local HF rc=0 staging="$MODELS_ROOT/$sub/$hub_path" got
+  local HF rc=0 staging="$MODELS_ROOT/$sub/$hub_path" got rev
+  rev=$(revision_for "$repo")
   HF=$(hf_bin)
   mkdir -p "$MODELS_ROOT/$sub/$(dirname "$hub_path")"
-  log "hf download $repo $hub_path -> $dest"
-  "$HF" download "$repo" "$hub_path" --local-dir "$MODELS_ROOT/$sub" || rc=$?
+  log "hf download $repo@$rev $hub_path -> $dest"
+  "$HF" download "$repo" "$hub_path" --revision "$rev" --local-dir "$MODELS_ROOT/$sub" || rc=$?
   if [ ! -f "$staging" ]; then
     log "FATAL: hf download rc=$rc but $staging does not exist"
     log "       (bare filenames silently fetch nothing; pass the IQ3_S/ or IQ1_M/ path)"
