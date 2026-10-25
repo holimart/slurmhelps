@@ -128,6 +128,10 @@ export STRATA_PROFILE_DIR="$JOB_LOCAL/profile"
 export STRATA_RUNTIME_DIR="$JOB_LOCAL/runtime"
 export XDG_STATE_HOME="$STATE_HOME"
 export XDG_CONFIG_HOME="$JOB_LOCAL/config"
+# Control scans $XDG_DATA_HOME/strata/components by default; point it at the
+# shared install (strata_control/engine_component.py: ENV_DIR wins). Without
+# this the components look absent and serve refuses to download one itself.
+export STRATA_COMPONENTS_DIR="$STRATA_ROOT/components"
 mkdir -p "$STRATA_PROFILE_DIR" "$STRATA_RUNTIME_DIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME"
 
 SERVER=none          # none | strata | stub
@@ -258,28 +262,49 @@ start_stub() { # port -> starts stub, waits ready
 }
 
 # ---- model staging ------------------------------------------------------------
+# pinned expected sizes (fetch-models.sh / setup.py); complete == exact bytes,
+# which also guards against staging a shard a download job has not finished.
+size_of() { case "$1" in
+  Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf) echo 54817524224 ;;
+  Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf) echo 28800138432 ;;
+  Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf) echo 29608446496 ;;
+  Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf) echo 28800138432 ;;
+  *) echo 0 ;;
+esac }
+
 prepare_model_dir() { # model_name -> sets CUR_DIR
   CUR_MODEL=$1
+  local sub cands=() dir cand f ok sz
   case "$1" in
-    iq3s)  subdir=iq3s
+    iq3s)  sub=iq3s
            want=(Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf
-                 Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf) ;;
-    coder) subdir=coder
+                 Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf)
+           cands=("$MODELS_ROOT/iq3s" "$MODELS_ROOT/models/IQ3_S") ;;
+    coder) sub=coder
            want=(Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf
-                 Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf) ;;
+                 Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf)
+           cands=("$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M") ;;
     *) echo "bench-matrix: unknown model $1" >&2; return 2 ;;
   esac
-  local src=$MODELS_ROOT/$subdir f
-  for f in "${want[@]}"; do
-    if [ ! -f "$src/$f" ]; then
-      log "FATAL: $src/$f missing — run llm/strata/fetch-models.sh --only $1 first"
-      return 3
-    fi
+  dir=""
+  for cand in "${cands[@]}"; do
+    ok=1
+    for f in "${want[@]}"; do
+      sz=$(stat -c %s "$cand/$f" 2>/dev/null || echo 0)
+      [ "$sz" = "$(size_of "$f")" ] || { ok=0; break; }
+    done
+    if [ "$ok" = 1 ]; then dir=$cand; log "pack $1 complete in $dir"; break; fi
+    log "pack $1 incomplete or absent under $cand (download job still running?)"
   done
+  if [ -z "$dir" ]; then
+    log "FATAL: no complete pack for $1; checked: ${cands[*]}"
+    log "       finish llm/strata/fetch-models.sh --only $1 (or the download job) first"
+    return 3
+  fi
   if [ "$COPY_MODELS" = 1 ]; then
     local need avail
     need=0
-    for f in "${want[@]}"; do need=$((need + $(stat -c %s "$src/$f"))); done
+    for f in "${want[@]}"; do need=$((need + $(stat -c %s "$dir/$f"))); done
     avail=$(df -B1 --output=avail "$SCRATCH_ROOT" 2>/dev/null | tail -1 | tr -d ' ')
     if [ "${avail:-0}" -lt $((need + (need / 20) + 2147483648)) ]; then
       log "FATAL: $SCRATCH_ROOT has ${avail:-?} bytes free, need $((need + need / 20)) (+5% margin)."
@@ -290,12 +315,12 @@ prepare_model_dir() { # model_name -> sets CUR_DIR
     log "copying $((need / 1073741824)) GiB of shards to $JOB_SCRATCH"
     for f in "${want[@]}"; do
       log "  cp $f"
-      cp "$src/$f" "$JOB_SCRATCH/$f"
+      cp "$dir/$f" "$JOB_SCRATCH/$f"
     done
     CUR_DIR=$JOB_SCRATCH
   else
-    CUR_DIR=$src
-    log "COPY_MODELS=0: reading shards straight from $src (expect slower startup)"
+    CUR_DIR=$dir
+    log "COPY_MODELS=0: reading shards straight from $dir (expect slower startup)"
   fi
 }
 
