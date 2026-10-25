@@ -589,3 +589,217 @@ sbatch --nice=100 --partition=ffa-gpulab --nodelist=volta05 \
   llm/strata/strata-bench.sbatch --model both \
   --contexts 1024,4096,16384,65536 --batches 1,2,4
 ```
+
+## Knob sweep (small contexts) — 2026-10-25
+
+The matrix above pins one engine recipe, so it cannot say which flag matters.
+`llm/strata/knob-sweep.sh` varies **one knob per variant** at
+1024/4096/16384 only, on one idle L40S, and writes a combined
+`knobs.csv`. The stored matrix, 64k, 131k, V100 and 2-GPU configs were not
+re-run.
+
+```text
+node        uk-g6-07 (gpu-ffa), 1x L40S 46,068 MiB, sm_89 (same gpu-ffa image as uk-g6-05; driver not re-queried)
+engine      0.1.50 …cuda13 (Terminal 0.1.51), LD_LIBRARY_PATH = l40x1 deps/cxx/lib
+pack        IQ3_S only (the tool accepts --model coder; one pack this session)
+server      strata launch --context 131072 --parallel 4 (8 for batch8)
+            --kv int8 --vision off --access local --no-api-key
+            --expert-cache auto --prefill auto --spec 4 --spec-min-p 0.5
+            --kv-resident 32768  (+ the variant's one flag)
+            --data-dir <private per variant>
+probe       strata_probe.py, max_tokens 128, 3 requests/slot, temperature 0
+jobs        38236768 main (31 min); 38237013 mtpoff+vramreserve redo (6 min)
+            discarded 38236954, 38236982 (gotcha G1)
+artifacts   /work/ffa/holecem/strata-runs/2026-10-25-knobs/
+```
+
+`--context 131072` is the **server window** (the baseline's), not a probe cell.
+That matters: at a 16k window `--kv-resident` stops streaming, so the
+kv-resident variants would have been no-ops.
+
+### Variants actually passed
+
+| variant | what was passed (on top of the baseline) | status |
+|:--|:--|:--|
+| `control` | nothing; one cell (1024, C1) | ok |
+| `nospec` | `--set spec=off` | **launch-fail** |
+| `mtpoff` | `strata launch --mtp off` | ok |
+| `spec_pure` | `--set spec=4 --set spec-min-p=0` | ok |
+| `kvbf16` | `--kv bf16` | **skipped-flag** |
+| `kvfp16` | `--set kv=fp16` | ok |
+| `kvres16k` | `--set kv-resident=16384` | ok |
+| `kvres64k` | `--set kv-resident=65536` | ok |
+| `batch8` | `--parallel 8`, C=1/4/8 cells | ok |
+| `groups1` | `--set batch-mtp=1 --set batch-groups=1` | ok |
+| `mtpserial` | env `STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1` | ok |
+| `vramreserve` | `--set vram-reserve-mib=1024` | ok |
+| `expert_cache_max` | (none) | **skipped-flag** |
+
+The job-1 variants (control…mtpserial) inherited `--mtp` from the installed
+config; the delivered `vramreserve` run passes `--mtp on` explicitly. Each
+variant's `engine-logs/launch/*.engine.log` starts with the exact engine argv,
+and `launch-config.json` records the `--set` pairs (`extra`).
+
+### Results (IQ3_S, decode/aggregate in tok/s, TTFT in s)
+
+`ok` cells only; `—` = not measured. Full rows incl. p95 and errors:
+`knobs.csv`.
+
+| variant | ctx | C1 dec | C1 agg | C1 TTFT50 | C4 dec | C4 agg | C4 TTFT50 | C4 TTFT95 | C8 dec | C8 agg | C8 TTFT95 |
+|:--|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| control | 1024 | 138.6 | 74.3 | 0.80 | — | — | — | — | — | — | — |
+| mtpoff | 1024 | 116.2 | 69.0 | 0.76 | 29.6 | 87.1 | 1.54 | 3.23 | — | — | — |
+| mtpoff | 4096 | 118.5 | 55.6 | 1.23 | 23.9 | 65.3 | 2.48 | 5.09 | — | — | — |
+| mtpoff | 16384 | 117.7 | 25.4 | 3.89 | 25.0 | 23.1 | 6.00 | 43.00 | — | — | — |
+| spec_pure | 1024 | 163.7 | 81.4 | 0.76 | 28.8 | 84.6 | 1.61 | 3.33 | — | — | — |
+| spec_pure | 4096 | 156.8 | 63.0 | 1.24 | 23.8 | 64.7 | 2.50 | 5.13 | — | — | — |
+| spec_pure | 16384 | 162.3 | 28.3 | 3.75 | 24.8 | 22.9 | 6.08 | 43.60 | — | — | — |
+| kvfp16 | 1024 | 151.5 | 74.0 | 0.86 | 28.2 | 81.1 | 1.73 | 3.60 | — | — | — |
+| kvfp16 | 4096 | 152.0 | 59.0 | 1.34 | 22.9 | 61.6 | 2.70 | 5.53 | — | — | — |
+| kvfp16 | 16384 | 157.6 | 24.3 | 4.45 | 21.8 | 20.2 | 13.24 | 45.23 | — | — | — |
+| kvres16k | 1024 | 138.0 | 77.5 | 0.73 | 29.5 | 86.0 | 1.55 | 3.27 | — | — | — |
+| kvres16k | 4096 | 139.1 | 60.4 | 1.23 | 23.9 | 64.9 | 2.49 | 5.12 | — | — | — |
+| kvres16k | 16384 | 160.0 | 28.2 | 3.71 | 10.7 | 27.1 | 6.60 | 17.69 | — | — | — |
+| kvres64k | 1024 | 136.2 | 72.3 | 0.83 | 28.1 | 82.2 | 1.70 | 3.48 | — | — | — |
+| kvres64k | 4096 | 155.8 | 62.0 | 1.25 | 23.7 | 64.7 | 2.51 | 5.16 | — | — | — |
+| kvres64k | 16384 | 156.8 | 26.8 | 3.97 | 10.7 | 27.0 | 6.63 | 17.69 | — | — | — |
+| batch8 | 1024 | 141.9 | 72.2 | 0.87 | 28.0 | 81.0 | 1.76 | 3.59 | 13.2 | 88.6 | 6.41 |
+| batch8 | 4096 | 165.8 | 62.6 | 1.24 | 23.5 | 64.4 | 2.52 | 5.16 | 10.5 | 69.3 | 9.12 |
+| batch8 | 16384 | 162.7 | 26.8 | 4.02 | 24.5 | 22.6 | 6.18 | 40.38 | 8.0 | 27.1 | 54.02 |
+| groups1 | 1024 | 141.4 | 76.3 | 0.79 | 27.0 | 89.4 | 0.85 | 3.35 | — | — | — |
+| groups1 | 4096 | 164.2 | 63.4 | 1.24 | 21.1 | 68.8 | 1.27 | 5.14 | — | — | — |
+| groups1 | 16384 | 157.9 | 26.9 | 3.93 | 17.7 | 27.3 | 8.42 | 22.39 | — | — | — |
+| mtpserial | 1024 | 148.2 | 77.8 | 0.78 | 26.7 | 89.5 | 0.85 | 3.39 | — | — | — |
+| mtpserial | 4096 | 142.1 | 60.9 | 1.24 | 25.8 | 67.4 | 2.53 | 5.17 | — | — | — |
+| mtpserial | 16384 | 169.7 | 27.4 | 3.94 | 27.2 | 24.9 | 5.61 | 40.15 | — | — | — |
+| vramreserve | 1024 | 128.0 | 72.3 | 0.81 | 28.7 | 84.1 | 1.63 | 3.32 | — | — | — |
+| vramreserve | 4096 | 134.9 | 59.2 | 1.25 | 24.1 | 65.4 | 2.49 | 5.11 | — | — | — |
+| vramreserve | 16384 | 145.5 | 26.6 | 3.94 | 10.7 | 27.0 | 6.62 | 17.71 | — | — | — |
+
+### Control cell vs the stored baseline
+
+| cell | stored | this run | Δ |
+|:--|---:|---:|---:|
+| decode p50 tok/s | 141.69 | 138.60 | −2.2% |
+| aggregate tok/s | 68.50 | 74.28 | +8.4% |
+| TTFT p50 s | 0.92 | 0.80 | −13% |
+| TTFT p95 s | 1.03 | 0.80 | −22% |
+
+Decode matches within the measured repeatability (two identical-config arms
+differed by 4.6% at this cell). Aggregate and TTFT differ because the stored
+campaign used the **uncalibrated** probe: its nominal 1024 cell carried 1,254
+real prompt tokens, while the calibrated probe lands at 1,024 (3.518
+chars/token + 63 template tokens). Shorter prompts mean less prefill, hence
+higher aggregate and lower TTFT; engine/host behaviour is unchanged.
+
+### What actually moved the numbers
+
+Repeatability first: `groups1` and `mtpserial` resolve to the **same** engine
+configuration on one GPU (both logs: `--batch-mtp: 4 slot drafters`, expert
+cache 17938, no layer split, so `--batch-groups 1` is the default). They are a
+free A/B repeat:
+
+```text
+                decode p50 Δ      aggregate Δ
+1024 x C1          -4.6%             -1.8%
+1024 x C4          +1.2%             -0.1%
+4096 x C1         +15.6%             +4.1%
+4096 x C4         -18.3%             +2.0%
+16384 x C1         -6.9%             -1.8%
+16384 x C4        -35.0%             +9.8%
+```
+
+So at these settings **aggregate tok/s is the usable statistic** (±2% at
+1024/4096, ±10% at 16k C4) and **per-stream decode p50 is not** (±16% at C1,
+±35% at C4). The reason is in the engine log: the C4 batch windows serialise
+the 12 requests differently from run to run, and `decode_tok_s_p50` comes from
+`timings.predicted_ms` per request; at 16k C4 `kvres16k` and `kvres64k` (very
+different resident-KV sizes) produced 10.72 and 10.74 tok/s p50 with the same
+17.69 s TTFT p95 — a slot-scheduling artefact, not a knob effect. Only effects
+that survive in **aggregate** (and in TTFT, which is stable) are reported:
+
+| knob | effect on aggregate | verdict |
+|:--|:--|:--|
+| `--spec-min-p 0` | **+8.3% at 1024 C1** (+15.5% decode); +2.6% at 4k, +5.3% at 16k (C1), flat at C4 | real only for short, highly predictable prompts |
+| no drafter (`--mtp off`) | **−8.2% / −9.5% / −5.5% at C1**; decode −18% / −23% / −26%; C4 unchanged (+3.6 / +0.8 / −11.0%, within noise) | drafts are worth ~16–26% per stream at C1 and nothing at C4 |
+| batch-MTP (`groups1`, `mtpserial`) | **+9.6% / +5.5% / +5.1% at C4** vs the four non-batch-MTP C4 cells | small but consistent at equal-concurrency C4 |
+| `--parallel 8` | **+9.4% / +7.6% / +19.6% aggregate at C8 vs the same variant's C4**; per-stream halves (13.2 / 10.5 / 8.0); TTFT p95 6.4 / 9.1 / 54 s | C8 buys total throughput, not latency. The engine kept all 8 slots (`--batch: 8 slot sessions`, `batch windows of up to 8 sequences`) |
+| `--vram-reserve-mib 1024` | −3.8 / −3.7 / −0.7% aggregate; **decode −9.7 / −12.3 / −8.4% at C1** (consistent across 3 cells) | ~1 GiB less expert cache costs ~10% per-stream decode |
+| `--kv fp16` | −1.6 / −4.0 / −9.5% aggregate, decode flat; **16k C4 TTFT p50 13.24 s vs ~6.0 s** (2.2×) and aggregate −22% | only clearly bad at 16k C4 (double KV bytes through the pinned-RAM path); otherwise within noise |
+| `--kv-resident 16384` | 16384 is clamped to the engine's **20480** floor (startup line: `KV streaming: 20480 of 131072`); aggregate ≤ +5% everywhere | no measurable effect at ≤16k prompts |
+| `--kv-resident 65536` | expert cache 17079 vs baseline 18057 slots; aggregate ≤ +4% | no measurable effect at ≤16k prompts |
+| `--kv bf16` | does not exist | skipped |
+| `--expert-cache max` | no `max` mode | skipped |
+
+Baseline-like median **decode p50** for reference: 141.7 / 28.1 (1024
+C1/C4), 153.9 / 23.6 (4096), 158.9 / 19.8 (16384). The expert cache moved exactly as expected:
+18057 slots baseline, 18436 with resident 20480, 17079 with resident 65536,
+17119 with fp16 KV, 16571 with 8 slots, 17893 with the 1 GiB reserve, 18592
+with no drafter.
+
+### Cells not run
+
+- The **control matrix** beyond 1024 C1: by design, the stored matrix already
+  has it and the control cell is only a host/engine check.
+- **coder IQ1_M**: not swept this session (one pack, one 240-min budget). The
+  tool accepts `--model coder` unchanged.
+- `nospec` (`--spec` removed): the engine refuses to start on a native IQ pack
+  (`it needs --native SHARD1, --spec T (T >= 2) and --prefill CHUNK`), so all
+  six cells are `launch-fail`. `mtpoff` is the workable no-drafts arm.
+- `kvbf16`: engine 0.1.50 answers `strata generate: --kv must be fp16, int8,
+  q4_0 or k8v4`. The real lossless mode (`kvfp16`) was measured instead.
+- `expert_cache_max`: `--expert-cache` takes a slot count or `auto`;
+  `atoi("max")` is 0, i.e. the cache off, not "max". `auto` is already the
+  baseline, so there is no distinct mode to vary.
+- 64k, 131k, V100 and 2-GPU cells: excluded by design (they exist).
+
+### Gotchas
+
+**G1 — a launch-level choice persists in the shared installed config.**
+`strata launch --mtp off` makes `setup.py` write `"mtp": false` into
+`strata-engine/install/strata-iq3_s.json`. The next variant ran setup again
+(fresh private data dir), but setup, given no `--mtp`, kept the `mtp: false` it
+had just written: its engine argv lost `--mtp` *and* `--spec-min-p`, the log
+said `+0 MiB for the draft head` and `drafts accepted 0 of 0`, and decode fell
+to ~117 tok/s. A per-variant `STRATA_PROFILE_DIR` alone does **not** fix this
+(the file is in the install root, not the profile). `knob-sweep.sh` now passes
+`--mtp on` explicitly for every non-mtpoff variant. Two runs (38236954,
+38236982) were discarded; their dirs are in `attic/`. Any future knob sweep
+that varies `--mtp` must do the same. This is a harness/engine interaction
+worth fixing upstream.
+
+**G2 — `--kv-resident` has a floor of 20480.** `--kv-resident 16384` is
+accepted but the startup line reports 20480; the help text's "(min 20480)" is
+a clamp, not a validation error. The 16k variant is therefore effectively a
+20k variant (expert cache 18436 vs 18057).
+
+**G3 — the L40S is at the VRAM edge with `--expert-cache auto`.** Every
+variant logged `only 435 MiB of VRAM free at the start of this request (below
+512 MiB)` (283 MiB on the second request) and the engine warns that the driver
+may page GPU memory to system RAM (#2065). `--vram-reserve-mib 1024` clears
+the warning (761 MiB free) but costs ~10% per-stream decode. Treat any decode
+number from this recipe as conditional on that headroom, especially at C4.
+
+**G4 — `--batch-groups` is a no-op on one GPU.** `--batch-groups 1` with
+`--batch-mtp` and env-only `STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1`
+produced byte-identical engine configuration (4 slot drafters, 17938 slots,
+one group). The docs' serial-vs-pipelined distinction needs a layer split.
+Also, `STRATA_BATCH_MTP_SERIAL=1` alone does **not** enable the feature: the
+gate needs `--batch-mtp` or `STRATA_BATCH_MTP=1`.
+
+**G5 — the probe is calibrated now; stored aggregate/TTFT are not directly
+comparable.** Compare decode across campaigns, aggregate only within this
+sweep, and always check `prompt_target_tokens` in the JSONL.
+
+### Reproduce
+
+```bash
+cd /work/ffa/holecem/slurmhelps-fleet
+
+llm/strata/knob-sweep.sh --plan --model iq3s --node uk-g6-07   # login-node plan
+llm/strata/knob-sweep.sh --self-test                          # stub, 5 cells
+
+sbatch --nice=100 --nodelist=uk-g6-07 --time=04:00:00 \
+  llm/strata/knob-sweep.sbatch --model iq3s --node uk-g6-07 --gpus 0 \
+  --contexts 1024,4096,16384 --batches 1,4 --variants all --budget-min 150
+```
