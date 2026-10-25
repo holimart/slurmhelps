@@ -99,3 +99,10 @@ error still recorded as a JSONL line. Stub bound to 127.0.0.1, killed after
   `SCRATCH_ROOT`/`COPY_MODELS` guidance.
 - pkill fallbacks match our own `$STRATA_ROOT/components/engine` path and run
   as the job user only — safe on shared Volta boxes.
+- Engine landed 2026-10-25 14:07Z: `strata 0.2.6 (build 0.1.51)`, components
+  `0.1.50-linux-x86_64-cuda-cuda12/-cuda13` under
+  `/work/ffa/holecem/strata-engine/components/engine`, both sha256 MATCH the
+  signed feed. Control's components dir must be exported
+  (`STRATA_COMPONENTS_DIR`) — runner now does. The fetch job's dirs are
+  `models/strata/models/{IQ3_S,coder-IQ1_M}` (accepted by the runner with an
+  exact-size gate; audit covers both layouts).

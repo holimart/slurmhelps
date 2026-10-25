@@ -15,9 +15,11 @@
 #   fetch-models.sh [--only iq3s|coder|all] [--verify] [--with-mmproj] [--submit]
 #
 #   --only X        fetch just this pack (default: all)
-#   --verify        re-hash the finished files (heavy IO on Lustre; the
-#                   manifest otherwise records the pinned Hub sha256 with
-#                   status=pinned)
+#   --verify        audit only: check presence + exact size + sha256 of every
+#                   expected file. Read-only — never downloads, never writes
+#                   the manifest, safe to run while the download job owns the
+#                   library (missing files report "missing" and exit 0; only
+#                   size/sha mismatch on a present file exits 1)
 #   --with-mmproj   also fetch mmproj-Qwen3.8-Flash-Next-BF16.gguf (~0.9 GB)
 #   --submit        wrap the run in `sbatch --nice=100` on a CPU partition
 #                   instead of downloading here (runs on the login node too,
@@ -53,17 +55,20 @@ while [ $# -gt 0 ]; do
 done
 case "$ONLY" in iq3s|coder|all) ;; *) echo "fetch-models: --only must be iq3s|coder|all" >&2; exit 2 ;; esac
 
-if [ "$SUBMIT" = 1 ]; then
+if [ "$SUBMIT" = 1 ] && [ "$VERIFY" != 1 ]; then
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   exec sbatch --nice=100 --job-name=strata-fetch --partition="$SUBMIT_PARTITION" \
     --nodes=1 --ntasks=1 --cpus-per-task=4 --mem=8G --time=11:00:00 \
     --output="$LOG_DIR/strata-fetch-%j.log" --wrap="bash '$here/fetch-models.sh' --only '$ONLY' $( [ "$VERIFY" = 1 ] && echo --verify ) $( [ "$WITH_MMPROJ" = 1 ] && echo --with-mmproj )"
 fi
 
-[ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR"
-mkdir -p "$MODELS_ROOT"
+if [ "$VERIFY" != 1 ]; then
+  [ -d "$LOG_DIR" ] || mkdir -p "$LOG_DIR"
+  mkdir -p "$MODELS_ROOT"
+fi
 
 log() { printf '[strata-fetch] %s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+[ "$SUBMIT" = 1 ] && [ "$VERIFY" = 1 ] && log "audit mode ignores --submit; running locally"
 
 hf_bin() {
   if command -v hf >/dev/null 2>&1; then echo hf
@@ -99,7 +104,7 @@ fetch_pack() { # variant_name subdir file_fn
     path=$MODELS_ROOT/$sub/$file
     got=""
     if [ -f "$path" ]; then got=$(stat -c %s "$path" 2>/dev/null || echo 0); fi
-    if [ "$got" = "$want_size" ] && [ "$VERIFY" != 1 ]; then
+    if [ "$got" = "$want_size" ]; then
       log "$name: $file already complete ($want_size bytes), skip download"
       manifest_line "$repo" "$file" "$want_size" "$want_sha" pinned "$path"
       continue
@@ -114,23 +119,63 @@ fetch_pack() { # variant_name subdir file_fn
       manifest_line "$repo" "$file" "$got" "$want_sha" size-mismatch "$path"
       return 1
     fi
-    if [ "$VERIFY" = 1 ]; then
-      log "$name: sha256 $file (verify)"
-      local real
-      real=$(sha256sum "$path" | cut -d' ' -f1)
-      if [ "$real" = "$want_sha" ]; then
-        manifest_line "$repo" "$file" "$want_size" "$real" verified "$path"
-      else
-        log "$name: BAD SHA256 $file got $real want $want_sha"
-        manifest_line "$repo" "$file" "$want_size" "$real" sha-mismatch "$path"
-        return 1
-      fi
-    else
-      manifest_line "$repo" "$file" "$want_size" "$want_sha" pinned "$path"
-    fi
+    manifest_line "$repo" "$file" "$want_size" "$want_sha" pinned "$path"
   done < <("$fn")
   log "$name: complete in $MODELS_ROOT/$sub"
 }
+
+# audit mode (--verify): read-only over the library. Checks presence, exact
+# size, sha256. Never downloads, never writes the manifest — safe to run
+# while the download job owns the library. Looks in the canonical subdir and
+# the fetch job's alternate dir; a file present in either counts.
+audit_pack() { # variant_name file_fn dir [dir...]
+  local name=$1 fn=$2; shift 2
+  local dirs=("$@") repo file want_size want_sha path d got real
+  while read -r repo file want_size want_sha; do
+    [ -n "$repo" ] || continue
+    path=""
+    for d in "${dirs[@]}"; do
+      if [ -f "$d/$file" ]; then path=$d/$file; break; fi
+    done
+    if [ -z "$path" ]; then
+      log "AUDIT $name: $file -> MISSING (looked in ${dirs[*]})"
+      AUDIT_MISSING=$((AUDIT_MISSING + 1))
+      continue
+    fi
+    got=$(stat -c %s "$path" 2>/dev/null || echo 0)
+    if [ "$got" != "$want_size" ]; then
+      log "AUDIT $name: $file -> SIZE-MISMATCH in $path: got $got want $want_size"
+      AUDIT_BAD=$((AUDIT_BAD + 1))
+      continue
+    fi
+    log "AUDIT $name: $file -> hashing $want_size bytes ($path)"
+    real=$(sha256sum "$path" | cut -d' ' -f1)
+    if [ "$real" = "$want_sha" ]; then
+      log "AUDIT $name: $file -> VERIFIED sha256 $real"
+    else
+      log "AUDIT $name: $file -> SHA-MISMATCH got $real want $want_sha"
+      AUDIT_BAD=$((AUDIT_BAD + 1))
+    fi
+  done < <("$fn")
+}
+
+if [ "$VERIFY" = 1 ]; then
+  AUDIT_MISSING=0; AUDIT_BAD=0
+  if [ "$ONLY" = all ] || [ "$ONLY" = iq3s ]; then
+    audit_pack iq3s files_iq3s "$MODELS_ROOT/iq3s" "$MODELS_ROOT/models/IQ3_S"
+    [ "$WITH_MMPROJ" = 1 ] && audit_pack iq3s-mmproj mmproj "$MODELS_ROOT/iq3s" "$MODELS_ROOT/models/IQ3_S"
+  fi
+  if [ "$ONLY" = all ] || [ "$ONLY" = coder ]; then
+    audit_pack coder files_coder "$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M"
+    [ "$WITH_MMPROJ" = 1 ] && audit_pack coder-mmproj mmproj "$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M"
+  fi
+  log "audit complete: missing=$AUDIT_MISSING corrupt=$AUDIT_BAD (library $MODELS_ROOT)"
+  if [ "$AUDIT_BAD" != 0 ]; then
+    log "one or more present files are corrupt; re-download them (fetch-models.sh)"
+    exit 1
+  fi
+  exit 0
+fi
 
 fail=0
 if [ "$ONLY" = all ] || [ "$ONLY" = iq3s ]; then

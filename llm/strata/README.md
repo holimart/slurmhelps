@@ -33,9 +33,13 @@ Coder   ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF
 
 Both shards are **required** per pack: Strata reads shard 2 (the n-gram/PLE
 table) at every start. Sizes/SHA-256 are pinned from
-`/work/ffa/holecem/src/Strata/setup.py`; `fetch-models.sh --verify` re-hashes.
+`/work/ffa/holecem/src/Strata/setup.py`; `fetch-models.sh --verify` is a
+read-only audit (presence + exact size + sha256; never downloads, never
+writes the manifest).
 Library layout: `/work/ffa/holecem/models/strata/{iq3s,coder}/` plus an
-append-only `manifest.txt`.
+append-only `manifest.txt`. `bench-matrix.sh` also accepts the download job's
+alternate dirs `models/strata/models/{IQ3_S,coder-IQ1_M}` — but only when
+every shard there has its exact pinned size (partial downloads never launch).
 
 ## Run
 
@@ -128,7 +132,10 @@ prefill numbers.
   `SCRATCH_ROOT` to the node's NVMe or `COPY_MODELS=0`.
 - **Engine variants**: one components dir serves both fleets; `strata update`
   itself can't run on the GPU-less login node, which is why `install-engine.sh`
-  fetches the two feed-named tarballs (sha256-verified) itself.
+  fetches the two feed-named tarballs (sha256-verified) itself. Control scans
+  `~/.local/share/strata/components` unless `STRATA_COMPONENTS_DIR` is set —
+  `bench-matrix.sh` exports it to `$STRATA_ROOT/components` (without it the
+  engine packages look absent on compute nodes).
 - **Parallel cap**: `strata launch --parallel` accepts 1–8; `--batches` is
   clamped to 8.
 - **Driver floor**: the cuda13 engine needs driver ≥ 580.65 (cuda12 ≥ 575.51);
