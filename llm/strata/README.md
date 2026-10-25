@@ -16,6 +16,7 @@ strata-bench.sbatch           Slurm entry point (execs bench-matrix.sh)
 bench-matrix.sh               the matrix runner (server per model, cells, CSV/JSONL)
 strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run)
 tests/stub_server.py          fake server for --self-test (127.0.0.1 only)
+tests/test_fetch_models.sh    offline fake-hf regression test for fetch-models.sh
 experiments/…                 protocol + results of each campaign
 ```
 
@@ -23,13 +24,20 @@ experiments/…                 protocol + results of each campaign
 
 ```text
 IQ3_S   ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF
-        Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf  54.8 GB
-        Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf  28.8 GB (shared table)
+        IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf  54.8 GB
+        IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf  28.8 GB (shared table)
 Coder   ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF
-        Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf  29.6 GB
-        + the same 00002 shard (28.8 GB n-gram/PLE table)
+        IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf  29.6 GB
+        + the same 00002 table (28.8 GB n-gram/PLE table)
         optional mmproj-Qwen3.8-Flash-Next-BF16.gguf (~0.9 GB; unused, --vision off)
 ```
+
+The **Hub paths are prefixed** (`IQ3_S/`, `IQ1_M/`). A bare filename makes
+`hf download` exit 0 without fetching anything, so `fetch-models.sh` passes
+the prefixed path and then asserts both existence and exact pinned size.
+The 28.8 GB shard 2 is byte-identical in both repos (same SHA-256, different
+pack filename); it is downloaded **once** into `models/strata/_shared/` and
+hardlinked into both pack dirs (copy fallback).
 
 Both shards are **required** per pack: Strata reads shard 2 (the n-gram/PLE
 table) at every start. Sizes/SHA-256 are pinned from
@@ -60,6 +68,12 @@ llm/strata/fetch-models.sh --only coder --submit
 sbatch --nice=100 llm/strata/strata-bench.sbatch
 sbatch --nice=100 llm/strata/strata-bench.sbatch --model coder \
   --contexts 1024,4096,16384,65536 --batches 1,2,4,8
+
+# 2-GPU L40 node (the runner passes --gpu 0,1 and the engine layer-splits):
+sbatch --nice=100 --nodelist=gpuffaNN llm/strata/strata-bench.sbatch \
+  --gpus 0,1 --model iq3s
+# equivalent env form (no commas in the value):
+GPUS_PER_NODE=2 sbatch --nice=100 ... llm/strata/strata-bench.sbatch --model iq3s
 ```
 
 **Always `--nice=100`** — these jobs must never crowd out the fleet's
@@ -67,12 +81,29 @@ reservation work. The default partition here is `ffa-short` (2 h), so never
 rely on the default; the sbatch pins `gpu-ffa` literally and you override on
 the sbatch command line (see next section).
 
+### Real env/CLI interface
+
+`MODEL_NAME=iq3s|coder|both` and `GPUS_PER_NODE=N` are honored now (unknown
+values fail fast). `--model` and `--gpus LIST` are the CLI equivalents and win.
+`GPUS_PER_NODE=2` is shorthand for `--gpus 0,1`; with one card no `--gpu` flag
+is passed and Strata picks it.
+
+**Do not put comma lists in `--export`.** Slurm splits the value at commas, so
+`--export=ALL,CTXS=1024,4096` silently runs with `CTXS=1024` and a bogus
+`4096` key. Pass matrix knobs as trailing arguments instead:
+
+```bash
+sbatch --nice=100 llm/strata/strata-bench.sbatch \
+  --model iq3s --contexts 1024,4096,16384,65536 --batches 1,2,4
+```
+
 ### V100
 
 V100 (sm_70, Volta) cannot run the CUDA 13 engine; `install-engine.sh`
 installs **both** engine variants and Strata's Control picks `cuda12`
 automatically from `nvidia-smi` archs — nothing to pass. Use only contexts
-`1024,4096,16384,65536` (docs/NVIDIA_V100.md). Volta nodes are shared
+`1024,4096,16384,65536` (docs/NVIDIA_V100.md); the probe now clamps a nominal
+65536 cell to `65536 − max_tokens − 128` real prompt tokens. Volta nodes are shared
 (`volta01` 1×16 GB, `volta02/03` 2×16 GB, `volta04` 1×32 GB, `volta05`
 4×32 GB), so pick a node that fits the pack and give it memory:
 
@@ -90,19 +121,40 @@ overrides belong on the `sbatch` command line, exactly as above.
 ## What the runner does
 
 Per model pack: copy the shards to node-local `/tmp/strata-$SLURM_JOB_ID`
-(free-space-checked; `COPY_MODELS=0` reads Lustre directly), start one
+(free-space-checked; `COPY_MODELS=0` reads Lustre directly), then start one
 server for the whole matrix (`strata launch --context max(CTXS) --parallel
-max(BATCHES) --kv int8 --vision off --access local --port <free> --no-api-key
---data-dir /work/ffa/holecem/models/strata/_strata-data --yes --no-tui
---restart`), wait for `/v1/models`, then probe every (context, concurrency)
-cell. Output:
+max(BATCHES) --gpu <list when >1> --kv int8 --vision off --access local
+--port <free> --no-api-key --data-dir <private> --yes --no-tui --restart`),
+wait for `/v1/models`, then probe every (context, concurrency) cell.
+
+Each job gets a **private engine data dir** `$DATA_DIR/jobs/<job-id>`, seeded
+from the shared `_strata-data` tree: read-only `mtp/` tensors and `packs/` are
+hardlinked, the small mutable `mtp/rt/` tree is copied. Two jobs on one node
+therefore never write the same `experts.bin`. If the shared tree is not
+complete yet, the runner holds a `flock` on `$DATA_DIR/.prepare.lock` across
+the first launch instead of racing another builder. The private dir is removed
+on exit unless `KEEP_DATA_DIR=1`.
+
+A startup precheck selects cuda13/cuda12 from `nvidia-smi` compute capability,
+checks the engine's highest required `GLIBCXX_*`, and either accepts the node
+`libstdc++`, prepends `CXX_LIB_DIR` (default the reusable l40x1
+`deps/cxx/lib`), or fails immediately with the workaround. Engine launch logs
+under the per-job state dir are copied to `OUTDIR/<model>/engine-logs/` before
+the EXIT trap deletes scratch.
+
+The probe calibrates prompt padding with two small `include_usage` requests
+(a slope plus the fixed chat-template overhead), then clamps the nominal
+context to `max_context - max_tokens - pad_safety`
+(default safety 128) and records the calibration factor and clamp in every
+JSONL cell. Output:
 
 ```text
 $OUTDIR/<model>/cells.jsonl    one JSON per cell: contract fields
                                ts,model,context,concurrency,prefill_tok_s,
                                decode_tok_s_p50,decode_tok_s_p95,aggregate_tok_s,
                                ttft_s_p50,ttft_s_p95,completion_tokens,
-                               prompt_tokens,engine_metrics,error (+diagnostics)
+                               prompt_tokens,engine_metrics,error (+diagnostics,
+                               prompt_target_tokens,prompt_clamped,calibration)
 $OUTDIR/<model>/summary.csv    ctx,concurrency,decode_tok_s_p50,aggregate_tok_s,
                                ttft_s_p50,ttft_s_p95,status
                                status = ok | fail | server-dead | skipped-budget
@@ -123,9 +175,24 @@ prefill numbers.
 
 - **MTP drafter**: on first launch Strata downloads the ~5–6 GB MTP draft
   layer from the original Qwen checkpoint into `--data-dir`. Compute nodes
-  have network; the persistent `--data-dir` on `/work` makes it a one-time
-  cost. Without network the engine runs **without the drafter** — decode
-  numbers drop, so check the launch log before trusting a low outlier.
+  have network; the persistent shared `_strata-data` makes it a one-time
+  cost, and each job then works from its private seeded copy. Without network
+  the engine runs **without the drafter** — decode numbers drop, so check the
+  launch log for `draft layer loaded` before trusting a low outlier.
+- **Hub paths**: `IQ3_S/` and `IQ1_M/` prefixes are mandatory. A bare
+  filename makes `hf download` exit 0 without fetching; the fetch script
+  asserts existence + exact size and fails loudly.
+- **Slurm `--export`**: never put commas in an export value (`CTXS=1024,4096`
+  becomes two keys). Use trailing `--contexts`/`--batches` args.
+- **DATA_DIR / concurrency**: the runner now always seeds a private
+  `$DATA_DIR/jobs/<job>`; if the shared `mtp/rt` tree is missing it holds
+  `$DATA_DIR/.prepare.lock` across the first launch. Do not point two old
+  runners at the same `--data-dir` — that is the bug this changed.
+- **EL9 libstdc++ floor**: the cuda13 engine needs `GLIBCXX_3.4.30`; the
+  gpu-ffa image has 3.4.29. The runner auto-prepends the reusable
+  `/work/ffa/holecem/strata-runs/2026-10-25-l40x1/deps/cxx/lib` when present,
+  or exits with the `LD_LIBRARY_PATH`/`CXX_LIB_DIR` workaround. It does not
+  rely on Control's driver-only cuda12 fallback.
 - **Login node**: never start servers or load models there. Only installs and
   downloads (network) plus `--self-test` (stdlib stub on 127.0.0.1) are OK.
 - **/tmp size**: IQ3_S needs ~86 GiB scratch; if `/tmp` is smaller set
@@ -140,12 +207,27 @@ prefill numbers.
   clamped to 8.
 - **Driver floor**: the cuda13 engine needs driver ≥ 580.65 (cuda12 ≥ 575.51);
   Control falls back to cuda12 automatically if older.
+- **Probe padding**: the probe no longer assumes 4 chars/token. It measures
+  the tokenizer with a small request and clamps to the window, recording
+  `prompt_target_tokens`/`prompt_clamped`/`calibration` in JSONL. A nominal
+  131072 cell now runs at ~130.8k real tokens instead of 400ing at ~149k.
+- **Concurrent `--verify`**: several login-node audits of the same ~114 GiB
+  library contend badly; run one at a time (or rely on the pinned manifest).
 
 ## Self-test evidence
 
-`bench-matrix.sh --self-test` (2026-10-25, login node): stub server +
-1 MB dummy gguf, 4 cells (ctx 512/1024 × C 1/2), all `ok`; stub reports
-engine `timings` so `decode_tok_s_p50` lands at the stub's exact rate
-(100.00 tok/s, asserted 90–110), aggregate doubles from C=1 to C=2, and both
-output files match the contract. Exit 0 on success, non-zero otherwise; the
-stub is killed by the EXIT trap (verified no lingering process).
+`bench-matrix.sh --self-test` (2026-10-25, login node, after the fixes): stub
+server + 1 MB dummy gguf, 4 cells (ctx 512/1024 × C 1/2), all `ok`; stub
+reports engine `timings` so `decode_tok_s_p50` lands at the exact rate
+(100.00 tok/s, asserted 90–110). The probe records a 4.007 chars/token
+calibration factor (two-point fit, zero intercept on the stub); the nominal
+1024 cell clamps to 864 prompt tokens
+(1024 − 32 max_tokens − 128 safety). The test also asserts the JSONL contract,
+that engine logs are archived before scratch cleanup, and that a private data
+dir isolates a mutable `rt/` file from the shared staging tree. Exit 0 on
+success, non-zero otherwise; the stub is killed by the EXIT trap.
+
+`tests/test_fetch_models.sh` (same day): fake `hf` + sparse files, checks
+prefixed `IQ3_S/`/`IQ1_M/` paths, exactly one shard-2 download, hardlinks into
+both pack dirs, exact sizes, and a loud failure when `hf` exits 0 but creates
+nothing. No network, no real model data.
