@@ -14,6 +14,8 @@ install-engine.sh             login node: Strata Terminal + cuda13 & cuda12 engi
 fetch-models.sh               hf-download the pinned GGUF packs + manifest
 strata-bench.sbatch           Slurm entry point (execs bench-matrix.sh)
 bench-matrix.sh               the matrix runner (server per model, cells, CSV/JSONL)
+knob-sweep.sbatch             Slurm entry point (execs knob-sweep.sh)
+knob-sweep.sh                 one-knob-at-a-time sweep at small contexts
 strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run)
 tests/stub_server.py          fake server for --self-test (127.0.0.1 only)
 tests/test_fetch_models.sh    offline fake-hf regression test for fetch-models.sh
@@ -170,6 +172,52 @@ server. Decode/prefill prefer the engine's llama.cpp-style `timings`
 falling back to client stream windows. TTFT = dispatch→first content delta.
 Prompts carry a unique salt per request so the prompt cache never fakes the
 prefill numbers.
+
+## Knob sweep (small contexts)
+
+The matrix pins one engine recipe. `knob-sweep.sh` varies **one knob per
+variant** at 1024/4096/16384 only (never 64k/131k/V100/2-GPU — those exist) so
+the deltas are attributable:
+
+```bash
+# login-node checks (no GPU, no Slurm):
+llm/strata/knob-sweep.sh --plan --model iq3s --node uk-g6-07
+llm/strata/knob-sweep.sh --self-test      # stub server, 5 cells, schema asserts
+
+# one sweep job (always --nice=100; pin the node and keep --node in sync):
+sbatch --nice=100 --nodelist=uk-g6-07 --time=11:00:00 \
+  llm/strata/knob-sweep.sbatch --model iq3s --node uk-g6-07 --gpus 0 \
+  --contexts 1024,4096,16384 --batches 1,4 --variants all --budget-min 240
+```
+
+Variants: `control` (baseline recipe, one 1024/C1 cell as a host/engine
+variance check), `nospec` (`--spec` removed), `spec_pure` (`--spec 4
+--spec-min-p 0`), `kvfp16` (`--kv fp16`), `kvres16k`/`kvres64k`
+(`--kv-resident` 16384/65536), `batch8` (`--parallel 8` plus C=8 cells),
+`groups1` (`--batch-mtp --batch-groups 1`), `mtpserial`
+(`STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1`). `kvbf16` and
+`expert_cache_max` are recorded as `skipped-flag`: engine 0.1.50 has no
+`--kv bf16` (only fp16/int8/q4_0/k8v4) and `--expert-cache` has no `max` mode.
+
+The pack is staged to node-local scratch **once** per job; each variant seeds a
+private `--data-dir` from `_strata-data` (hardlinked read-only trees, copied
+`mtp/rt`) and starts its own headless server at the baseline server window
+(`--max-context 131072`, so `--kv-resident` still streams). Output:
+
+```text
+$OUTDIR/knobs.csv                     variant,ctx,concurrency,decode_p50,
+                                      aggregate,ttft_p50,ttft_p95,status,error
+$OUTDIR/variants.csv                  exact --set/env and outcome per variant
+$OUTDIR/<model>/<variant>/summary.csv same columns as knobs.csv
+$OUTDIR/<model>/<variant>/cells.jsonl one probe cell per line, `variant` field
+$OUTDIR/<model>/<variant>/launch-config.json, engine-logs/, variant-facts.txt
+```
+
+Status is `ok|fail|server-dead|launch-fail|skipped-flag|skipped-budget`
+(`skipped-done` on `--resume`). A failed launch or dead server records the real
+error and the sweep continues with the next variant. Re-running with the same
+`--outdir` needs `--resume` (keep complete variants) or `--force`; partial
+variant dirs are moved to `*.bak-<ts>` before a retry.
 
 ## Gotchas
 
