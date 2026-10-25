@@ -769,6 +769,13 @@ run_variant() { # variant
 csv_row_variant() { # variant status parallel flags env note
   local f=$OUTDIR/variants.csv
   [ -f "$f" ] || printf 'variant,status,parallel,flags,env,note\n' > "$f"
+  # one row per variant: replace an earlier row (a --resume/redo job must not
+  # leave two outcomes for the same variant)
+  local keep=$f.keep
+  { head -1 "$f"
+    tail -n +2 "$f" | grep -v "^\"$1\"," || true
+  } > "$keep"
+  mv "$keep" "$f"
   printf '%s,%s,%s,%s,%s,%s\n' \
     "$(csv_escape "$1")" "$(csv_escape "$2")" "$(csv_escape "$3")" \
     "$(csv_escape "$4")" "$(csv_escape "$5")" "$(csv_escape "$6")" >> "$f"
