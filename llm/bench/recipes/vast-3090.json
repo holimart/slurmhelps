@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "vast-3090",
+  "description": "The aborted 1x RTX 3090 Vast.ai campaign; kept as a runnable plan with the bandwidth trap encoded.",
+  "backend": "vast",
+  "runner": "cloud",
+  "model": "strata-packs",
+  "experiment": "2026-10-25-vast-3090x1",
+  "evidence": ["strata-runs/2026-10-25-vast-3090x1"],
+  "hardware": {
+    "kind": "cloud",
+    "offer": {
+      "gpu_name": "RTX 3090",
+      "num_gpus": 1,
+      "min_ram_gb": 120,
+      "min_disk_gb": 150,
+      "min_driver": "580.65",
+      "max_down_cost_per_tb": 5.0,
+      "min_reliability": 0.97,
+      "max_dph": 0.4,
+      "model_gb": 113.2,
+      "hours": 2.0,
+      "image": "vastai/base-image:cuda-13.0.1-auto",
+      "disk_gb": 160
+    }
+  },
+  "mode": "cloud",
+  "options": {
+    "flow": "plan",
+    "packs": "iq3s coder q2_0",
+    "setup_script": "setup3090.sh"
+  },
+  "output": {"root": "logs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 120,
+    "cost_usd": 3.98,
+    "basis": "2026-10-25 instance 57724534 was auto-stopped after 14 min and cost $3.983, almost all download"
+  },
+  "caveats": [
+    "NO MEASUREMENTS: the 2026-10-25 3090 run was aborted when the Vast credit ran out; no server ever started and no cell exists.",
+    "That host billed $0.052/GB = $53.33/TB; 73 GB cost $3.80. The offer filter here caps internet_down_cost_per_tb at $5/TB.",
+    "The cheapest 3090 offers were on driver 570.181, below the cuda12 floor (575.51) as well as the cuda13 floor (580.65); they are unusable for Strata.",
+    "Top up the account and check can_pay=true before renting; the 2x and 4x configs were never rented for that reason.",
+    "The intended cells were 1k/4k/16k/64k x C1/2/4; 131k and 262k were to be skipped everywhere."
+  ]
+}

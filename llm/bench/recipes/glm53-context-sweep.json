@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "glm53-context-sweep",
+  "description": "GLM-5.3-Flash REAP50 long-context points 4k-1M on 2x L40 (one server per point).",
+  "backend": "glm53",
+  "runner": "context",
+  "model": "glm53-reap50",
+  "experiment": "2026-10-22-context-cache-runs",
+  "evidence": ["repo:llm/glm53-reap50/experiments/data/2026-10-22-context-sweep-2x48gb.json"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-05",
+    "gres": "gpu:2",
+    "cpus": 32,
+    "mem": "256G",
+    "time": "12:00:00",
+    "gpus": "0,1",
+    "gpu_type": "2x L40 48GB"
+  },
+  "mode": "context",
+  "options": {
+    "engine": "llamacpp",
+    "variant": "iq4_xs",
+    "contexts": "4096:8 16384:4 65536:2 262144:1 524288:1 1048576:1",
+    "osl": 128
+  },
+  "budget_min": 55,
+  "output": {"root": "glm_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 55,
+    "basis": "2026-10-22 context sweep budget (SWEEP_BUDGET_MIN=55)"
+  },
+  "caveats": [
+    "One server per context point because llama.cpp's -c is shared across -np slots.",
+    "The 1M point is attempted last with a hard timeout and is expected to be compute-bound on the dense DSA fallback; earlier points are kept if it times out.",
+    "This is the llama.cpp/GGUF path, not the SGLang NVFP4 maximum-throughput path.",
+    "context-sweep.sh starts its own server; run it inside an allocation, never on the login node.",
+    "The 2026-10-22 JSON is the 2x48GB run; do not mix it with the 2xA100 paged-KV numbers."
+  ]
+}

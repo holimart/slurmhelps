@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100-resident-4x",
+  "description": "IQ3_S fully resident on four V100-32G cards (volta05): cold 1k-256k plus warm 64k/128k/256k.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "experiment": "2026-10-26-v100-residency-kernels",
+  "evidence": ["strata-runs/2026-10-26-v100-resident/b-4x-iq3s"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:4",
+    "cpus": 32,
+    "mem": "340G",
+    "time": "11:30:00",
+    "gpus": "0,1,2,3",
+    "gpu_type": "4x V100-SXM2-32GB"
+  },
+  "mode": "cold",
+  "cells": [
+    "1024:1", "1024:2", "1024:4",
+    "4096:1", "4096:2", "4096:4",
+    "16384:1", "16384:2", "16384:4",
+    "65536:1", "65536:2",
+    "131072:1", "131072:2",
+    "262144:1", "262144:2"
+  ],
+  "warm_cells": ["65536:1", "131072:1", "262144:1"],
+  "probe": {
+    "max_context": 262144,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "warm_repeats": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 300,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 300,
+    "basis": "2026-10-26 phase B budget (cold 4x V100 plus three warm cells)"
+  },
+  "caveats": [
+    "One allocation must own all four cards; the layer split is not tensor parallel.",
+    "The 262144 cell is prefill-dominated with 128-token answers and is not a sustained-throughput measure.",
+    "Warm cells rerun the same server and rely on the conversation cache; repeat 1 is the cold reference, not the stored cold number.",
+    "Historical phase B shared one staged PLE shard with phases A and E; a standalone rerun pays the Lustre read.",
+    "volta05 is a shared node; check that no other job owns cards 0-3 first."
+  ]
+}

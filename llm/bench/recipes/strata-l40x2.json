@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "strata-l40x2",
+  "description": "Strata cold matrix on two L40S cards in layer-split mode, same cell ladder as l40x1.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "experiment": "2026-10-25-strata-smoke-matrix",
+  "evidence": ["strata-runs/2026-10-25-l40x2"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-08",
+    "gres": "gpu:2",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "11:30:00",
+    "gpus": "0,1",
+    "gpu_type": "2x L40S 48GB"
+  },
+  "mode": "cold",
+  "cells": [
+    "1024:1", "1024:2", "1024:4",
+    "4096:1", "4096:2", "4096:4",
+    "16384:1", "16384:2", "16384:4",
+    "65536:1", "65536:2", "65536:4",
+    "131072:1", "131072:2", "131072:4"
+  ],
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 420,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 90,
+    "basis": "2026-10-25 l40x2 matrix wall"
+  },
+  "caveats": [
+    "Two cards run a layer split, not tensor parallelism; the second card buys only about 10-20% at C4.",
+    "Historical engine log: '100% of the experts resident' on the layer-split path, so the expert-cache hit rate is null and not comparable with one card.",
+    "The probe clamps the nominal 131072 cell to window - max_tokens - 128; the 2026-10-25 run predates this and its 128k cells differ.",
+    "Both cards belong to one allocation; do not co-schedule another strata job on the same node."
+  ]
+}

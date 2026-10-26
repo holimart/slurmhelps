@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "strata-sustained-512",
+  "description": "Long-answer (512-token) Strata decode on one L40S, to separate sustained decode from the 128-token matrix.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "evidence": [],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-06",
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "11:30:00",
+    "gpus": "0",
+    "gpu_type": "1x L40S 48GB"
+  },
+  "mode": "cold",
+  "cells": ["1024:1", "4096:1", "16384:1", "4096:4"],
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 512,
+    "requests_per_slot": 5,
+    "pad_safety": 128
+  },
+  "budget_min": 240,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 60,
+    "basis": "planning estimate only: no 512-token Strata run has been performed yet"
+  },
+  "caveats": [
+    "This recipe is a new definition assembled from the 128-token matrix; it has NOT been run. Do not treat its estimate as measured.",
+    "512 completion tokens at 5 requests per slot reduce prefill dominance but increase wall time linearly; keep --budget-min below the 11.5 h Slurm limit.",
+    "The engine's draft head and MTP acceptance are most visible at long answers; record acceptance from /metrics if present.",
+    "The 4096:4 cell is a batch stress point, not four independent servers."
+  ]
+}

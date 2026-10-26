@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "name": "glm53-cache-sweep",
+  "description": "GLM-5.3-Flash REAP50 llama.cpp prefix-cache ladder 100k-950k on 2x L40.",
+  "backend": "glm53",
+  "runner": "cache",
+  "model": "glm53-reap50",
+  "experiment": "2026-10-22-context-cache-runs",
+  "evidence": ["repo:llm/glm53-reap50/experiments/data/2026-10-22-cache-probe-2x48gb.json"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-05",
+    "gres": "gpu:2",
+    "cpus": 32,
+    "mem": "256G",
+    "time": "12:00:00",
+    "gpus": "0,1",
+    "gpu_type": "2x L40 48GB"
+  },
+  "mode": "cache",
+  "options": {
+    "engine": "llamacpp",
+    "variant": "iq4_xs",
+    "prefixes": "100000 200000 300000 400000 500000 600000 700000 800000 900000 950000",
+    "suffix": 128,
+    "osl": 128,
+    "ctx": 1048576
+  },
+  "budget_min": 55,
+  "output": {"root": "glm_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 55,
+    "basis": "2026-10-22 cache probe budget (SWEEP_BUDGET_MIN=55)"
+  },
+  "caveats": [
+    "llama.cpp has one active KV slot and a host prompt cache, not a multi-prefix GPU tree; multi-branch GPU reuse, RAM-vs-GPU KV tiers and multi-agent cache capacity are NOT measured.",
+    "The probe never issues a cold miss request; miss time is inferred from the cumulative fill.",
+    "Q4_K_S (87.1 GiB) and IQ4_XS (82.0 GiB) fit 96 GB differently; this recipe pins IQ4_XS for headroom.",
+    "Start this inside an allocation: cache-sweep.sh starts its own llama.cpp server.",
+    "cache-sweep.sh requires the patched llama.cpp fork built by llm/glm53-reap50/install.sh."
+  ]
+}

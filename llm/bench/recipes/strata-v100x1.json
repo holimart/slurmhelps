@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100x1",
+  "description": "Strata cold matrix on one V100-32G (cuda12 engine): 1k/4k/16k/64k at C1/2/4.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "experiment": "2026-10-25-strata-smoke-matrix",
+  "evidence": ["strata-runs/2026-10-25-v100x1"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:1",
+    "cpus": 24,
+    "mem": "190G",
+    "time": "11:30:00",
+    "gpus": "0",
+    "gpu_type": "1x V100-SXM2-32GB"
+  },
+  "mode": "cold",
+  "cells": [
+    "1024:1", "1024:2", "1024:4",
+    "4096:1", "4096:2", "4096:4",
+    "16384:1", "16384:2", "16384:4",
+    "65536:1", "65536:2", "65536:4"
+  ],
+  "probe": {
+    "max_context": 65536,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 300,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 120,
+    "basis": "2026-10-25 v100x1 matrix wall"
+  },
+  "caveats": [
+    "Only contexts 1024/4096/16384/65536 are legal on V100; never reuse the L40 131k cell.",
+    "Volta nodes are shared: volta01 1x16GB, volta02/03 2x16GB, volta05 4x32GB. Pick a card that fits the pack and set --mem.",
+    "The 2026-10-25 run had 65536 cells rejected client-side (HTTP 400) before probe calibration; the current probe clamps and records the real prompt size.",
+    "The cuda12 engine is selected automatically on sm_70; do not force cuda13.",
+    "volta04 has been DOWN since 2026-09-07 (reboot timed out)."
+  ]
+}

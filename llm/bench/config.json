@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "comment": "Site values for benchctl. Code reads keys here; no cluster path belongs in benchlib/*.py. Override the whole file with BENCH_CONFIG or the work root with BENCH_WORK_ROOT.",
+  "work_root": "/work/ffa/holecem",
+  "paths": {
+    "results": "{work_root}/results",
+    "strata_runs": "{work_root}/strata-runs",
+    "logs": "{work_root}/logs",
+    "models": "{work_root}/models",
+    "strata_models": "{work_root}/models/strata",
+    "strata_engine": "{work_root}/strata-engine",
+    "strata_data": "{work_root}/models/strata/_strata-data",
+    "cxx_lib": "{work_root}/strata-runs/2026-10-25-l40x1/deps/cxx/lib",
+    "images": "{work_root}/images",
+    "glm_model": "{work_root}/models/glm53-reap50",
+    "glm_runs": "{work_root}/runs/glm53-reap50",
+    "venvs": "{work_root}/venvs",
+    "qwen38_model": "{work_root}/models/qwen38-flash-next-fp4-local",
+    "qwen38_sif": "{work_root}/images/qwen38-vllm.sif",
+    "qwen35_35b_model": "{work_root}/models/qwen35-35b-a3b-awq",
+    "qwen35_122b_model": "{work_root}/models/qwen35-122b-a10b-awq",
+    "node_tmp": "/tmp",
+    "state": "{work_root}/bench/state",
+    "datasets": "/home/holecem/Projects/opportunityscan"
+  },
+  "slurm": {
+    "account": "ffa",
+    "nice": 100,
+    "default_partition": "gpu-ffa",
+    "login_node_glob": "hpc-head*"
+  },
+  "vast": {
+    "api": "https://console.vast.ai/api/v0",
+    "image": "vastai/base-image:cuda-13.0.1-auto",
+    "max_down_cost_per_tb": 5.0,
+    "min_driver": "580.65",
+    "min_reliability": 0.97,
+    "runtype": "ssh_direc ssh_proxy",
+    "ssh_key": "~/.ssh/id_ed25519",
+    "default_hours": 2.0
+  }
+}
