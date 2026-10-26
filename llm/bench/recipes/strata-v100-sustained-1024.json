@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100-sustained-1024",
+  "description": "Sustained 1024-token answers at 64k and 262k on the resident 4x V100-32G IQ3_S server, to separate strict decode/TPOT from the 128-token matrix.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "experiment": "2026-10-27-v100-extras",
+  "evidence": [],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:4",
+    "cpus": 32,
+    "mem": "340G",
+    "time": "11:00:00",
+    "gpus": "0,1,2,3",
+    "gpu_type": "4x V100-SXM2-32GB"
+  },
+  "mode": "cold",
+  "cells": ["65536:1", "262144:1"],
+  "probe": {
+    "max_context": 262144,
+    "max_tokens": 1024,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 20,
+  "output": {"root": "strata_runs", "subdir": "2026-10-27-v100-extras/h2-sustained"},
+  "estimate": {
+    "wall_minutes": 10,
+    "basis": "3 x (prefill + 1024 tokens) at 64k and 262k; about 14 s of decode per request at 72 tok/s"
+  },
+  "caveats": [
+    "NEW DEFINITION, first run 2026-10-27. The 262k cell is prefill-dominated; report strict decode/TPOT separately from aggregate.",
+    "3 requests per slot at C1; the engine's predicted_ms is the strict decode window, the client total includes TTFT.",
+    "The 262k cell needs the resident 4x server; on fewer cards the pack does not fit the same way."
+  ]
+}

@@ -46,7 +46,8 @@
 #                        all,control,nospec,spec_pure,kvbf16,kvfp16,kvres16k,
 #                        kvres64k,batch8,groups1,mtpserial,vramreserve,
 #                        expert_cache_max,sm70table,fusedecode,pfwmma,
-#                        argmaxrows,grnormfast
+#                        argmaxrows,grnormfast,kvq4_0,kvk8v4,pf4096,pf8192,
+#                        pf16384,cpushare_auto,batchmtp,lookup4
 #   --budget-min MIN     stop opening cells after this wall time (default 240;
 #                        keep it well inside the 11.5 h Slurm limit)
 #   --outdir DIR         results root (default
@@ -144,7 +145,7 @@ FORCE=0
 SELF_TEST=0
 CONTROL_CTX=1024
 
-ALL_VARIANTS="control basefull nospec mtpoff spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial vramreserve expert_cache_max sm70table fusedecode pfwmma argmaxrows grnormfast"
+ALL_VARIANTS="control basefull nospec mtpoff spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial vramreserve expert_cache_max sm70table fusedecode pfwmma argmaxrows grnormfast kvq4_0 kvk8v4 pf4096 pf8192 pf16384 cpushare_auto batchmtp lookup4"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -208,7 +209,7 @@ fi
 
 variant_known() {
   case "$1" in
-    control|basefull|nospec|mtpoff|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|vramreserve|expert_cache_max|sm70table|fusedecode|pfwmma|argmaxrows|grnormfast) return 0 ;;
+    control|basefull|nospec|mtpoff|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|vramreserve|expert_cache_max|sm70table|fusedecode|pfwmma|argmaxrows|grnormfast|kvq4_0|kvk8v4|pf4096|pf8192|pf16384|cpushare_auto|batchmtp|lookup4) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -239,6 +240,12 @@ variant_set_flags() {
     kvres64k) printf '%s' "--set kv-resident=65536" ;;
     groups1) printf '%s' "--set batch-mtp=1 --set batch-groups=1" ;;
     vramreserve) printf '%s' "--set vram-reserve-mib=1024" ;;
+    kvq4_0) printf '%s' "--set kv=q4_0" ;;
+    kvk8v4) printf '%s' "--set kv=k8v4" ;;
+    pf4096) printf '%s' "--set prefill=4096" ;;
+    pf8192) printf '%s' "--set prefill=8192" ;;
+    pf16384) printf '%s' "--set prefill=16384" ;;
+    lookup4) printf '%s' "--set lookup-chain=4" ;;
     *) printf '' ;;
   esac
 }
@@ -262,6 +269,8 @@ variant_env_pairs() {
     pfwmma) printf '%s' "STRATA_PF_WMMA=1" ;;
     argmaxrows) printf '%s' "STRATA_ARGMAX_ROWS_SM70=1" ;;
     grnormfast) printf '%s' "STRATA_GR_NORM_FAST=1" ;;
+    cpushare_auto) printf '%s' "STRATA_PREFILL_CPU_SHARE=auto" ;;
+    batchmtp) printf '%s' "STRATA_BATCH_MTP=1" ;;
     *) printf '' ;;
   esac
 }
@@ -282,7 +291,8 @@ variant_batches() {
 clear_variant_env() {
   unset STRATA_BATCH_MTP STRATA_BATCH_MTP_SERIAL \
         STRATA_SM70_TABLE STRATA_FUSE_DECODE STRATA_PF_WMMA \
-        STRATA_ARGMAX_ROWS_SM70 STRATA_GR_NORM_FAST 2>/dev/null || true
+        STRATA_ARGMAX_ROWS_SM70 STRATA_GR_NORM_FAST \
+        STRATA_PREFILL_CPU_SHARE STRATA_BATCH_MTP 2>/dev/null || true
 }
 
 # ---- logging / CSV helpers ---------------------------------------------------

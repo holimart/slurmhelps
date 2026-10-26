@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100-batchmtp-lookup-coder",
+  "description": "Batch-MTP and prompt-lookup drafts for Coder IQ1_M on one V100-32G at 16k/64k, C1 and C4.",
+  "backend": "strata",
+  "runner": "knobs",
+  "model": "coder",
+  "experiment": "2026-10-27-v100-extras",
+  "evidence": [],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:1",
+    "cpus": 24,
+    "mem": "200G",
+    "time": "11:00:00",
+    "gpus": "0",
+    "gpu_type": "1x V100-SXM2-32GB"
+  },
+  "mode": "knobs",
+  "options": {
+    "contexts": "16384,65536",
+    "batches": "1,4",
+    "variants": "basefull,batchmtp,lookup4"
+  },
+  "probe": {
+    "max_context": 65536,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 40,
+  "output": {"root": "strata_runs", "subdir": "2026-10-27-v100-extras/m9-batchmtp-lookup-coder"},
+  "estimate": {
+    "wall_minutes": 30,
+    "basis": "three launches plus 4 cells per variant at 16k/64k"
+  },
+  "caveats": [
+    "NEW DEFINITION, first run 2026-10-27. `batchmtp` is STRATA_BATCH_MTP=1 with --parallel 4 (C1+C4), not `--batch-groups`.",
+    "`lookup4` is --set lookup-chain=4 (prompt-lookup drafts after MTP); acceptance must be read from the engine request metrics, not assumed.",
+    "Coder IQ1_M on one V100 is effectively resident (100% decode expert hit in the 2026-10-26 sweep), which keeps the draft effect attributable.",
+    "The 16k C4 cell is unstable across variants (2026-10-26 finding); do not attribute from it alone."
+  ]
+}
