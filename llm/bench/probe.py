@@ -30,7 +30,8 @@ Usage:
       --context 4096 --concurrency 4 --max-tokens 128 \
       --requests-per-slot 3 --json-out cell.jsonl
 
-Warm-cache mode (opt-in; cold stays the default and its JSONL is unchanged):
+Warm-cache mode (opt-in; cold stays the default and its request shape is
+unchanged):
   strata_probe.py ... --mode warm --warm-repeats 3 --json-out cell.jsonl
 
 In warm mode each slot sends one saltless prompt, then repeats the SAME
@@ -40,6 +41,23 @@ ttft_warm_s_p50/p95, reused_tokens_p50, ttft speedup and the engine's
 conversation_cache block/budget.  Repeat 1 can itself hit a checkpoint left
 by a previous cell with the same context (the prompt is deterministic), so
 its reuse is reported rather than assumed zero.
+
+Chain (checkpoint / prefix-growth) mode:
+  strata_probe.py ... --mode chain --stops 1024,100000,200000,262144 \\
+      --tokens-per-turn 512 --max-context 262144 --json-out turns.jsonl
+
+One fixed salt is chosen per invocation; every turn's prompt is the previous
+turn's prompt plus deterministically appended filler lines, so each stop is an
+exact prefix extension of the previous one.  The requests are sequential in
+ONE conversation slot.  Each turn appends its own JSON line (mode="chain")
+with the nominal stop, actual prompt/reused tokens, TTFT, engine prefill time,
+delta-prefill tokens, the strict client stream-window decode rate
+(decode_tok_s_strict = (N-1)/(t_done-t_first)), TPOT, and the engine's
+`reused` count as proof that the checkpoint path engaged.
+
+All modes also record per-request strict timing (decode_s, tpot_ms,
+decode_tok_s_strict) and the cell summary carries their p50/p95.  Existing
+fields keep their meaning; historical JSONL is untouched.
 
 Patterned after /work/ffa/holecem/scratch-claude/qwen_smoke.py (read-only).
 """
@@ -117,6 +135,57 @@ def build_warm_prompt(context, slot, chars_per_token=DEFAULT_CHARS_PER_TOKEN,
                       intercept_tokens=0.0):
     chars = (float(context) - float(intercept_tokens)) * float(chars_per_token)
     return build_warm_filler(max(1.0, chars), context, slot)
+
+
+def build_chain_filler(target_chars, salt):
+    """Filler for one chain turn; a larger target is a prefix extension.
+
+    The head carries only the ONE salt chosen for the whole chain -- never the
+    stop number or a per-turn marker.  Appending `record000000...` lines in
+    order therefore makes prompt(stop_i) an exact prefix of prompt(stop_j) for
+    every i < j, which is what the engine's checkpoint lookup keys on."""
+    target_chars = max(1, int(target_chars))
+    # Salt first, so a fresh chain shares no content prefix with calibration
+    # prompts or with a chain from an earlier invocation; within this chain the
+    # head is byte-identical for every turn.
+    head = "%s [chain]\n" % salt
+    parts = [head]
+    n = 0
+    have = len(head)
+    while have < target_chars:
+        line = "record%06d: %s.\n" % (n, FILLER_WORDS)
+        parts.append(line)
+        have += len(line)
+        n += 1
+    return "".join(parts)
+
+
+def build_chain_prompt(context, salt, chars_per_token=DEFAULT_CHARS_PER_TOKEN,
+                       intercept_tokens=0.0):
+    chars = (float(context) - float(intercept_tokens)) * float(chars_per_token)
+    return build_chain_filler(max(1.0, chars), salt)
+
+
+def parse_stops(spec):
+    """'1024,100000,262144' -> [1024, 100000, 262144] (strictly increasing)."""
+    out = []
+    for item in str(spec or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            value = int(item)
+        except ValueError:
+            raise ValueError("stop %r is not an integer" % item)
+        if value < 1:
+            raise ValueError("stop %d must be >= 1" % value)
+        if out and value <= out[-1]:
+            raise ValueError("stops must be strictly increasing (%d after %d)"
+                             % (value, out[-1]))
+        out.append(value)
+    if not out:
+        raise ValueError("--stops needs at least one size")
+    return out
 
 
 def percentile(values, q):
@@ -250,6 +319,8 @@ def stream_one(base, model, prompt, max_tokens, temperature, timeout):
     rec = {"ok": False, "error": None, "prompt_tokens": None,
            "completion_tokens": None, "ttft_s": None, "total_s": None,
            "decode_tok_s": None, "prefill_tok_s": None,
+           "decode_s": None, "tpot_ms": None, "decode_tok_s_strict": None,
+           "engine_prompt_ms": None, "engine_predicted_ms": None,
            "timing_source": None, "finish_reason": None}
     body = {
         "model": model,
@@ -317,17 +388,31 @@ def stream_one(base, model, prompt, max_tokens, temperature, timeout):
     rec["completion_tokens"] = completion_tokens
     rec["ttft_s"] = t_first
 
+    # Strict client-side decode window: first content delta to stream close.
+    # TPOT excludes the first token by definition, so N-1 intervals.
+    if t_first is not None:
+        decode_s = t_done - t_first
+        rec["decode_s"] = decode_s
+        if completion_tokens and completion_tokens >= 2 and decode_s > 0:
+            rec["tpot_ms"] = (decode_s / float(completion_tokens - 1)) * 1000.0
+            rec["decode_tok_s_strict"] = (completion_tokens - 1) / decode_s
+
     # Decode rate: engine predicted_ms when the server reports timings
     # (llama.cpp names, BENCHMARK_PROTOCOL), else the client decode window.
     pred_ms = timings.get("predicted_ms") if isinstance(timings, dict) else None
+    rec["engine_predicted_ms"] = pred_ms
     if pred_ms and completion_tokens:
         rec["decode_tok_s"] = completion_tokens / (pred_ms / 1000.0)
         rec["timing_source"] = "engine.timings.predicted_ms"
     elif t_first is not None and completion_tokens and t_done > t_first:
         rec["decode_tok_s"] = completion_tokens / (t_done - t_first)
         rec["timing_source"] = "client.stream-window"
+    if rec["decode_tok_s"] is None and rec["decode_tok_s_strict"] is not None:
+        rec["decode_tok_s"] = rec["decode_tok_s_strict"]
+        rec["timing_source"] = "client.stream-window-strict"
 
     prompt_ms = timings.get("prompt_ms") if isinstance(timings, dict) else None
+    rec["engine_prompt_ms"] = prompt_ms
     if prompt_ms and prompt_tokens:
         rec["prefill_tok_s"] = prompt_tokens / (prompt_ms / 1000.0)
     elif t_first and prompt_tokens:
@@ -540,13 +625,212 @@ def warm_cell_fields(results, ok, cc_before, cc_after, warm_repeats):
     }
 
 
+def chain_schedule(stops, last_repeats):
+    """(stop, repeat, turn) triples: one turn per stop, optional tail repeats."""
+    schedule = [(stop, 1, idx + 1) for idx, stop in enumerate(stops)]
+    for rep in range(int(last_repeats)):
+        schedule.append((stops[-1], rep + 2, len(stops)))
+    return schedule
+
+
+def chain_turn_record(rec, claim, stop, prev_stop, turn, repeat,
+                      prev_prompt_tokens, gen_tokens, max_context, safety,
+                      target_tokens, clamped, calibration, salt, cc_now):
+    """One JSONL line for a chain turn (the engine's `reused` is the proof)."""
+    prompt_tokens = rec.get("prompt_tokens")
+    engine_prompt_tokens = claim.get("prompt_tokens") if claim else None
+    if prompt_tokens is None:
+        prompt_tokens = engine_prompt_tokens
+    reused = claim.get("reused") if claim else None
+
+    reuse_fraction = None
+    delta_tokens = None
+    if prompt_tokens is not None:
+        if reused is not None:
+            reuse_fraction = (float(reused) / float(prompt_tokens)
+                              if prompt_tokens else None)
+            delta_tokens = max(0, int(prompt_tokens) - int(reused))
+        else:
+            delta_tokens = int(prompt_tokens)
+
+    prefill_s = None
+    timing_source = None
+    claim_ms = claim.get("prompt_ms") if claim else None
+    if claim_ms:
+        prefill_s = float(claim_ms) / 1000.0
+        timing_source = "engine.metrics.prompt_ms"
+    elif rec.get("engine_prompt_ms"):
+        prefill_s = float(rec["engine_prompt_ms"]) / 1000.0
+        timing_source = "engine.timings.prompt_ms"
+    elif rec.get("ttft_s") is not None:
+        prefill_s = rec["ttft_s"]
+        timing_source = "client.ttft"
+
+    delta_tok_s = None
+    if delta_tokens is not None and prefill_s and prefill_s > 0:
+        delta_tok_s = delta_tokens / prefill_s
+
+    completion_tokens = rec.get("completion_tokens")
+    total_s = rec.get("total_s")
+    aggregate = None
+    if completion_tokens and total_s and total_s > 0:
+        aggregate = completion_tokens / total_s
+
+    strict = rec.get("decode_tok_s_strict")
+    decode_tok_s = rec.get("decode_tok_s")
+    if decode_tok_s is None:
+        decode_tok_s = strict
+
+    return {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "mode": "chain",
+        "model": None,                      # filled by the caller
+        "stop": stop,
+        "prev_stop": prev_stop,
+        "turn": turn,
+        "repeat": repeat,
+        "prompt_tokens": prompt_tokens,
+        "prev_prompt_tokens": prev_prompt_tokens,
+        "reused_tokens": reused,
+        "reuse_fraction": reuse_fraction,
+        "ttft_s": rec.get("ttft_s"),
+        "prefill_s": prefill_s,
+        "prefill_delta_tokens": delta_tokens,
+        "prefill_delta_tok_s": delta_tok_s,
+        "decode_s": rec.get("decode_s"),
+        "tpot_ms": rec.get("tpot_ms"),
+        "decode_tok_s_strict": strict,
+        "decode_tok_s": decode_tok_s,
+        "aggregate_tok_s": aggregate,
+        "completion_tokens": completion_tokens,
+        "timing_source": timing_source,
+        "status": "ok" if rec.get("ok") else "fail",
+        "error": rec.get("error"),
+        "context": stop,
+        "concurrency": 1,
+        "max_tokens": gen_tokens,
+        "engine_prompt_tokens": engine_prompt_tokens,
+        "engine_prompt_ms": claim_ms,
+        "prompt_target_tokens": target_tokens,
+        "prompt_clamped": clamped,
+        "max_context": max_context,
+        "pad_safety": safety,
+        "calibration": calibration,
+        "chain_salt": salt,
+        "conversation_cache": cc_now,
+    }
+
+
+def chain_worker(out, lock, base, model, root, stops, chars_per_token,
+                 intercept_tokens, gen_tokens, temperature, timeout,
+                 metrics_timeout, max_context, safety, last_repeats,
+                 seen_times, salt, calibration):
+    """Sequential requests in ONE conversation slot; never concurrent."""
+    prev_stop = None
+    prev_prompt_tokens = None
+    for stop, repeat, turn in chain_schedule(stops, last_repeats):
+        target_tokens, clamped = prompt_budget(stop, max_context, gen_tokens,
+                                               safety)
+        prompt = build_chain_prompt(target_tokens, salt, chars_per_token,
+                                    intercept_tokens)
+        rec = stream_one(base, model, prompt, gen_tokens, temperature, timeout)
+        raw = metrics_raw(root, metrics_timeout)
+        claim = claim_engine_request(raw, seen_times, lock) if raw else None
+        record = chain_turn_record(
+            rec, claim, stop, prev_stop, turn, repeat, prev_prompt_tokens,
+            gen_tokens, max_context, safety, target_tokens, clamped,
+            calibration, salt, conversation_cache_of(raw))
+        record["model"] = model
+        with lock:
+            out.append(record)
+            prev_prompt_tokens = record.get("prompt_tokens") or prev_prompt_tokens
+            prev_stop = stop
+
+
+def run_chain_mode(args, base, root, calibration, model_warn):
+    """--mode chain: append one JSON line per turn, then a stderr summary."""
+    stops = parse_stops(args.stops)
+    if args.concurrency != 1:
+        print("[strata-probe] chain mode is one conversation slot; "
+              "--concurrency must be 1", file=sys.stderr)
+        return 2
+    if args.tokens_per_turn < 2:
+        print("[strata-probe] --tokens-per-turn must be >= 2 for TPOT",
+              file=sys.stderr)
+        return 2
+    if args.max_context and stops[-1] > args.max_context:
+        print("[strata-probe] chain last stop %d exceeds --max-context %d; "
+              "it will be clamped per turn" % (stops[-1], args.max_context),
+              file=sys.stderr)
+
+    raw_before = metrics_raw(root, args.metrics_timeout)
+    cc_before = conversation_cache_of(raw_before)
+    seen_times = set()
+    if raw_before is not None:
+        for entry in raw_before.get("requests") or []:
+            if isinstance(entry, dict):
+                seen_times.add(entry.get("time"))
+
+    salt = uuid.uuid4().hex[:12]
+    out = []
+    lock = threading.Lock()
+    t0 = time.monotonic()
+    chain_worker(out, lock, base, args.model, root, stops,
+                 calibration["chars_per_token"],
+                 calibration.get("intercept_tokens", 0.0),
+                 args.tokens_per_turn, args.temperature, args.timeout,
+                 args.metrics_timeout, args.max_context, args.pad_safety,
+                 args.chain_last_repeats, seen_times, salt, calibration)
+    wall = time.monotonic() - t0
+
+    with open(args.json_out, "a") as fh:
+        for record in out:
+            fh.write(json.dumps(record) + "\n")
+
+    print("[strata-probe] chain salt=%s stops=%s tokens/turn=%d turns=%d "
+          "wall=%.1fs -> %s"
+          % (salt, ",".join(str(s) for s in stops), args.tokens_per_turn,
+             len(out), wall, args.json_out))
+    for record in out:
+        print("[strata-probe]   turn %d stop=%d%s prompt=%s reused=%s "
+              "ttft=%s prefill=%s delta=%s strict=%s tpot=%s agg=%s %s"
+              % (record["turn"], record["stop"],
+                 " r%d" % record["repeat"] if record["repeat"] > 1 else "",
+                 record["prompt_tokens"], record["reused_tokens"],
+                 "%.3f" % record["ttft_s"] if record["ttft_s"] is not None else "-",
+                 "%.3f" % record["prefill_s"] if record["prefill_s"] is not None else "-",
+                 record["prefill_delta_tokens"],
+                 "%.1f" % record["decode_tok_s_strict"]
+                 if record["decode_tok_s_strict"] is not None else "-",
+                 "%.2f" % record["tpot_ms"]
+                 if record["tpot_ms"] is not None else "-",
+                 "%.2f" % record["aggregate_tok_s"]
+                 if record["aggregate_tok_s"] is not None else "-",
+                 record["status"]))
+
+    failed = [r for r in out if r["status"] != "ok"]
+    if model_warn and not out:
+        print("[strata-probe] error: %s" % model_warn, file=sys.stderr)
+        return 1
+    if failed:
+        print("[strata-probe] error: %d/%d chain turns failed (first: %s)"
+              % (len(failed), len(out), failed[0].get("error")),
+              file=sys.stderr)
+        return 1
+    if not any((r.get("reused_tokens") or 0) > 0 for r in out[1:]):
+        print("[strata-probe] warning: no checkpoint reuse reported on any "
+              "growth turn (reused_tokens=0 or unavailable)", file=sys.stderr)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="OpenAI streaming benchmark probe")
     ap.add_argument("--base-url", required=True,
                     help="server root, e.g. http://127.0.0.1:8080 (…/v1 also accepted)")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--context", type=int, required=True,
-                    help="nominal prompt size in tokens (clamped to the window)")
+    ap.add_argument("--context", type=int, default=None,
+                    help="nominal prompt size in tokens (clamped to the window); "
+                         "not used by --mode chain (see --stops)")
     ap.add_argument("--max-context", type=int, default=None,
                     help="server context window; clamps prompt to "
                          "max_context - max_tokens - pad_safety")
@@ -560,17 +844,34 @@ def main():
     ap.add_argument("--timeout", type=float, default=1800.0,
                     help="per-request wall-clock timeout (protocol default 1800 s)")
     ap.add_argument("--metrics-timeout", type=float, default=15.0)
-    ap.add_argument("--mode", choices=("cold", "warm"), default="cold",
+    ap.add_argument("--mode", choices=("cold", "warm", "chain"), default="cold",
                     help="cold (default): random-salt prompts, every request a "
                          "full prefill; warm: one saltless cold request followed "
                          "by --warm-repeats identical ones so prompt/conversation "
-                         "cache reuse is measured")
+                         "cache reuse is measured; chain: one conversation whose "
+                         "prompt grows through --stops (prefix growth)")
     ap.add_argument("--warm-repeats", type=int, default=3,
                     help="warm repeats after the initial saltless request "
                          "(default 3; total requests per slot = 1 + N)")
+    ap.add_argument("--stops", default="1000,100000,200000,262144",
+                    help="chain mode: comma-separated prompt sizes reached by "
+                         "prefix extension (default 1000,100000,200000,262144)")
+    ap.add_argument("--tokens-per-turn", type=int, default=512,
+                    dest="tokens_per_turn",
+                    help="chain mode: completion tokens generated on every turn "
+                         "(default 512)")
+    ap.add_argument("--chain-last-repeats", type=int, default=0,
+                    dest="chain_last_repeats",
+                    help="chain mode: extra repeats of the last stop (default 0)")
     args = ap.parse_args()
+    if args.mode != "chain" and args.context is None:
+        ap.error("--context is required unless --mode chain")
     if args.warm_repeats < 1:
         ap.error("--warm-repeats must be >= 1")
+    if args.tokens_per_turn < 1:
+        ap.error("--tokens-per-turn must be >= 1")
+    if args.chain_last_repeats < 0:
+        ap.error("--chain-last-repeats must be >= 0")
 
     base = chat_root(args.base_url)
     root = host_root(args.base_url)
@@ -588,6 +889,13 @@ def main():
 
     calibration = calibrate_chars_per_token(base, args.model, args.temperature,
                                             args.timeout, args.max_context)
+
+    if args.mode == "chain":
+        try:
+            return run_chain_mode(args, base, root, calibration, model_warn)
+        except ValueError as exc:
+            ap.error(str(exc))
+
     prompt_tokens, clamped = prompt_budget(args.context, args.max_context,
                                            args.max_tokens, args.pad_safety)
     if clamped:
@@ -703,6 +1011,22 @@ def main():
         "pad_safety": args.pad_safety,
         "calibration": calibration,
     }
+    # Strict client stream-window metrics (added 2026-10-26).  These are
+    # additive: decode_tok_s / aggregate_tok_s above keep their old meaning.
+    decode_s_samples = [r["decode_s"] for r in ok
+                        if isinstance(r.get("decode_s"), (int, float))]
+    tpot_samples = [r["tpot_ms"] for r in ok
+                    if isinstance(r.get("tpot_ms"), (int, float))]
+    strict_samples = [r["decode_tok_s_strict"] for r in ok
+                      if isinstance(r.get("decode_tok_s_strict"), (int, float))]
+    line.update({
+        "decode_s_p50": percentile(decode_s_samples, 0.50),
+        "decode_s_p95": percentile(decode_s_samples, 0.95),
+        "tpot_ms_p50": percentile(tpot_samples, 0.50),
+        "tpot_ms_p95": percentile(tpot_samples, 0.95),
+        "decode_tok_s_strict_p50": percentile(strict_samples, 0.50),
+        "decode_tok_s_strict_p95": percentile(strict_samples, 0.95),
+    })
     if warm:
         line.update(warm_cell_fields(results, ok, cc_before, cc_after,
                                      args.warm_repeats))
@@ -730,8 +1054,9 @@ def main():
                  line.get("cache_reuse_engaged"), args.json_out))
     if err:
         print("[strata-probe] error: %s" % err, file=sys.stderr)
-        sys.exit(1)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
