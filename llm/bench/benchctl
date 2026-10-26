@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""benchctl — one interface over the LLM benchmark backends.
+
+The backend scripts under llm/{strata,qwen38,qwen35,glm53-reap50} remain the
+source of truth.  This CLI validates recipes, prints exactly what would run,
+submits with --nice=100, and reads the result artifacts.  See README.md.
+"""
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from benchlib.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())
