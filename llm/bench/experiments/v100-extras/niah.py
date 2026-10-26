@@ -217,6 +217,7 @@ def ask_tool(base, model, ctx, chars, timeout):
         out["tool_names"] = names
         out["tool_arguments"] = [tc.get("arguments") for tc in r["tool_calls"]]
         out["correct"] = any(n == "read_file" for n in names)
+        out["correct_any"] = out["correct"]
         break
     return out
 

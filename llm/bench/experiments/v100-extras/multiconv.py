@@ -43,9 +43,25 @@ def corpus(nchars):
 
 
 def build_prompt(chars, conv):
+    # Distinct body per conversation: a shared filler let the engine reuse a
+    # long suffix across conversations (the 2026-10-27 first run showed
+    # reused=81,920 on a "cold" 262k turn).  Rotate the canonical word list
+    # per conversation and tag every line, so only the intended warm repeats
+    # of the same conversation can match.
     head = ("[conversation %d | workspace=%s]\n\n"
             % (conv, "alpha" if conv % 2 == 0 else "beta"))
-    return head + corpus(max(1, chars - len(head)))
+    words = sp.FILLER_WORDS.split()
+    shift = (conv * 7) % len(words)
+    seq = " ".join(words[shift:] + words[:shift])
+    parts = [head]
+    have = len(head)
+    n = 0
+    while have < chars:
+        line = "record%06d c%d: %s.\n" % (n, conv, seq)
+        parts.append(line)
+        have += len(line)
+        n += 1
+    return "".join(parts)
 
 
 def main():
