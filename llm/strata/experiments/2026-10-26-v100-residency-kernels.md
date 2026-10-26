@@ -271,9 +271,12 @@ full K/V also lives in pinned RAM (0.77 GiB at 131k window, ~1.5 GiB at
 ## D. Warm vs cold at the maximum contexts (4× resident IQ3_S)
 
 `--warm-cells 65536:1,131072:1,262144:1 --warm-repeats 3` ran on the **same
-server** as B, right after the cold ladder. Each slot sends one saltless
-prompt and three byte-identical repeats; repeat 1 is the same-prompt cold
-reference, repeats 2–4 hit the prompt checkpoint cache.
+server** as B, right after the cold ladder (bench-matrix's integrated warm
+pass, which is the same `strata_probe.py --mode warm` that `warm-cache.sh`
+drives; it was folded into the B job because a separate `warm-cache.sh` job
+would have paid the 30–90 min single-OST staging again). Each slot sends one
+saltless prompt and three byte-identical repeats; repeat 1 is the
+same-prompt cold reference, repeats 2–4 hit the prompt checkpoint cache.
 
 | ctx | C | cold repeat-1 (s) | warm p50 (s) | warm p95 (s) | speedup | reused tokens p50 |
 |---:|--:|---:|---:|---:|---:|---:|
@@ -283,7 +286,7 @@ reference, repeats 2–4 hit the prompt checkpoint cache.
 
 Reuse engaged fully: `reused_tokens_p50 = prompt − 5` at every size
 (65,535 / 131,008 / 261,611) and `cache_reuse_engaged=true`. The cold
-reference from repeat 1 is 6–7 % faster than the salted cold cell in B
+reference from repeat 1 is 4–6 % faster than the salted cold cell in B
 (16.94 vs 18.06 s at 64k, 68.96 vs 72.01 s at 256k), which is the expected
 salt/tokenizer difference.
 
@@ -526,3 +529,95 @@ shared inode.
   2026-10-25 sweep and not re-run.
 - **`kvbf16` / `expert-cache max`**: flags do not exist in 0.1.50; recorded
   as `skipped-flag` in 2026-10-25, not repeated.
+
+## Appendix — every knob-sweep cell
+
+Raw values behind the delta table. Each variant's exact engine argv is in
+`e-knobs-coder/coder/<variant>/engine-logs/launch/*.json` and is the
+baseline argv below plus only the `--set`/env named in `variants.csv`:
+
+```text
+strata --serve --pack <private>/packs/coder-iq1_m --native <staged shard1>
+  --ple-gguf <staged shard2> --expert-profile expert-profile-coder.bin
+  --max-context 65536 --kv int8 --kv-resident 32768 --expert-cache auto
+  --prefill auto --ple-io ram --spec 4 --spec-min-p 0.5 --mtp <private>/mtp/rt
+  --batch 4
+```
+
+| variant | ctx | C | decode p50 | aggregate | TTFT p50 | TTFT p95 |
+|:--|---:|--:|---:|---:|---:|---:|
+| basefull | 1024 | 1 | 81.30 | 43.16 | 1.44 | 1.44 |
+| basefull | 1024 | 4 | 16.19 | 46.82 | 3.00 | 6.22 |
+| basefull | 4096 | 1 | 80.61 | 27.74 | 2.99 | 3.00 |
+| basefull | 4096 | 4 | 11.41 | 29.36 | 6.13 | 12.55 |
+| basefull | 16384 | 1 | 82.33 | 11.50 | 9.59 | 9.60 |
+| basefull | 16384 | 4 | 7.40 | 10.64 | 18.81 | 67.18 |
+| spec_pure | 1024 | 1 | 84.24 | 43.53 | 1.44 | 1.44 |
+| spec_pure | 1024 | 4 | 16.07 | 46.53 | 2.99 | 6.22 |
+| spec_pure | 4096 | 1 | 83.46 | 28.20 | 3.01 | 3.01 |
+| spec_pure | 4096 | 4 | 11.38 | 29.30 | 6.09 | 12.54 |
+| spec_pure | 16384 | 1 | 86.28 | 11.10 | 10.07 | 10.09 |
+| spec_pure | 16384 | 4 | 7.40 | 10.54 | 19.02 | 82.48 |
+| mtpoff | 1024 | 1 | 81.15 | 43.12 | 1.40 | 1.42 |
+| mtpoff | 1024 | 4 | 17.09 | 48.64 | 2.92 | 6.13 |
+| mtpoff | 4096 | 1 | 80.67 | 27.77 | 2.94 | 2.95 |
+| mtpoff | 4096 | 4 | 11.80 | 30.04 | 6.04 | 12.40 |
+| mtpoff | 16384 | 1 | 75.83 | 11.09 | 9.92 | 9.95 |
+| mtpoff | 16384 | 4 | 11.00 | 10.18 | 22.63 | 60.55 |
+| kvfp16 | 1024 | 1 | 81.36 | 41.91 | 1.49 | 1.51 |
+| kvfp16 | 1024 | 4 | 15.90 | 45.72 | 3.11 | 6.47 |
+| kvfp16 | 4096 | 1 | 80.88 | 26.84 | 3.19 | 3.19 |
+| kvfp16 | 4096 | 4 | 11.03 | 28.05 | 6.51 | 13.28 |
+| kvfp16 | 16384 | 1 | 81.40 | 10.34 | 10.91 | 10.92 |
+| kvfp16 | 16384 | 4 | 10.13 | 9.28 | 42.31 | 56.14 |
+| kvres16k | 1024 | 1 | 83.30 | 43.38 | 1.42 | 1.44 |
+| kvres16k | 1024 | 4 | 16.24 | 46.81 | 2.97 | 6.21 |
+| kvres16k | 4096 | 1 | 80.37 | 28.21 | 2.98 | 3.00 |
+| kvres16k | 4096 | 4 | 11.45 | 29.36 | 6.13 | 12.52 |
+| kvres16k | 16384 | 1 | 82.28 | 11.12 | 10.01 | 10.04 |
+| kvres16k | 16384 | 4 | 10.95 | 10.12 | 38.77 | 60.97 |
+| kvres64k | 1024 | 1 | 83.96 | 42.91 | 1.46 | 1.46 |
+| kvres64k | 1024 | 4 | 16.31 | 46.67 | 3.04 | 6.31 |
+| kvres64k | 4096 | 1 | 82.70 | 28.75 | 2.96 | 2.97 |
+| kvres64k | 4096 | 4 | 11.61 | 29.82 | 6.01 | 12.39 |
+| kvres64k | 16384 | 1 | 87.12 | 11.70 | 9.48 | 9.50 |
+| kvres64k | 16384 | 4 | 7.36 | 10.76 | 18.42 | 93.54 |
+| batch8 | 1024 | 1 | 78.27 | 41.93 | 1.47 | 1.48 |
+| batch8 | 1024 | 4 | 15.96 | 45.90 | 3.07 | 6.35 |
+| batch8 | 1024 | 8 | 7.20 | 48.66 | 3.12 | 11.37 |
+| batch8 | 4096 | 1 | 87.67 | 28.86 | 3.01 | 3.01 |
+| batch8 | 4096 | 4 | 11.23 | 28.97 | 6.17 | 12.63 |
+| batch8 | 4096 | 8 | 4.64 | 30.07 | 6.24 | 22.32 |
+| batch8 | 16384 | 1 | 89.00 | 11.10 | 10.10 | 10.15 |
+| batch8 | 16384 | 4 | 10.72 | 9.87 | 26.76 | 78.99 |
+| batch8 | 16384 | 8 | 7.21 | 10.57 | 30.70 | 167.15 |
+| sm70table | 1024 | 1 | 86.98 | 43.79 | 1.43 | 1.44 |
+| sm70table | 1024 | 4 | 16.63 | 47.70 | 3.00 | 6.23 |
+| sm70table | 4096 | 1 | 85.38 | 28.55 | 3.00 | 3.00 |
+| sm70table | 4096 | 4 | 11.66 | 29.69 | 6.15 | 12.50 |
+| sm70table | 16384 | 1 | 87.80 | 11.61 | 9.59 | 9.65 |
+| sm70table | 16384 | 4 | 10.90 | 10.15 | 26.30 | 112.27 |
+| fusedecode | 1024 | 1 | 81.79 | 42.80 | 1.44 | 1.45 |
+| fusedecode | 1024 | 4 | 16.31 | 46.86 | 3.00 | 6.21 |
+| fusedecode | 4096 | 1 | 81.55 | 28.20 | 3.00 | 3.02 |
+| fusedecode | 4096 | 4 | 11.41 | 29.24 | 6.13 | 12.61 |
+| fusedecode | 16384 | 1 | 88.53 | 11.14 | 10.07 | 10.08 |
+| fusedecode | 16384 | 4 | 10.85 | 10.03 | 26.38 | 74.24 |
+| pfwmma | 1024 | 1 | 82.63 | 43.19 | 1.44 | 1.44 |
+| pfwmma | 1024 | 4 | 16.10 | 46.60 | 3.01 | 6.22 |
+| pfwmma | 4096 | 1 | 87.92 | 29.50 | 2.88 | 2.89 |
+| pfwmma | 4096 | 4 | 11.69 | 30.14 | 5.91 | 12.08 |
+| pfwmma | 16384 | 1 | 84.64 | 11.71 | 9.47 | 9.52 |
+| pfwmma | 16384 | 4 | 11.55 | 10.62 | 25.27 | 95.05 |
+| argmaxrows | 1024 | 1 | 83.83 | 43.44 | 1.44 | 1.44 |
+| argmaxrows | 1024 | 4 | 16.14 | 46.73 | 3.00 | 6.23 |
+| argmaxrows | 4096 | 1 | 84.89 | 28.37 | 2.97 | 3.00 |
+| argmaxrows | 4096 | 4 | 11.41 | 29.30 | 6.10 | 12.54 |
+| argmaxrows | 16384 | 1 | 84.14 | 11.48 | 9.63 | 9.63 |
+| argmaxrows | 16384 | 4 | 7.39 | 10.56 | 18.86 | 67.37 |
+| grnormfast | 1024 | 1 | 87.58 | 43.57 | 1.44 | 1.45 |
+| grnormfast | 1024 | 4 | 16.27 | 46.80 | 3.00 | 6.23 |
+| grnormfast | 4096 | 1 | 81.92 | 28.14 | 2.99 | 3.01 |
+| grnormfast | 4096 | 4 | 11.42 | 29.34 | 6.12 | 12.64 |
+| grnormfast | 16384 | 1 | 83.59 | 11.14 | 10.00 | 10.08 |
+| grnormfast | 16384 | 4 | 10.86 | 10.05 | 26.44 | 61.25 |
