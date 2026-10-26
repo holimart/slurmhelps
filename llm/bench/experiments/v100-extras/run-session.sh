@@ -112,7 +112,7 @@ probe_cell() { # outjson ctx c max_tokens rps
     --max-tokens "$4" --requests-per-slot "$5" --json-out "$1"
 }
 
-# ============================ H1/H2/H3/H6 ==================================
+# ============================ H1/H2/H3 =====================================
 stage_iq3s || skip "all IQ3_S phases (staging failed)"
 if [ -f "$PACKS/iq3s/$I3S1" ] && [ -f "$PACKS/iq3s/$I3S2" ]; then
 
@@ -157,21 +157,17 @@ if [ -f "$PACKS/iq3s/$I3S1" ] && [ -f "$PACKS/iq3s/$I3S2" ]; then
       t1=$(date +%s.%N)
       kill "$samp" 2>/dev/null || true
       printf '%s %s\n' "$t0" "$t1" > "$OUT/h6-power/bracket-262k.txt"
-      toks=$(python3 - "$OUT/h2-sustained/cells.jsonl" <<'PY'
+      python3 - "$OUT/h2-sustained/cells.jsonl" > "$OUT/h6-power/tokens-262k.txt" <<'PY'
 import json,sys
 n=0
 for l in open(sys.argv[1]):
     d=json.loads(l)
-    if d.get("context")==262144: n+=d.get("completion_tokens") or 0
+    if d.get("context")==262144:
+        n += d.get("completion_tokens") or 0
 print(n)
 PY
-)
-      python3 "$EXTRAS/power-report.py" --samples "$OUT/h6-power/cell-262k.csv" \
-        --start "$t0" --end "$t1" --tokens "${toks:-0}" \
-        --idle "$OUT/h6-power/idle.csv" --json-out "$OUT/h6-power/power-262k.json" \
-        >"$OUT/h6-power/report.txt" 2>&1 || log "H6 power report failed"
       cp "$OUT/h2-sustained/cells.jsonl" "$OUT/h6-power/h2-cells.jsonl" 2>/dev/null || true
-      phase_done "H2/H6"
+      phase_done "H2"
     fi
 
     # ---- H3 multi-conversation warm -------------------------------------
@@ -238,10 +234,19 @@ if need 20 "H5 chain 4x"; then
   fi
 fi
 
-# ============================ M10 topology =================================
-phase "M10 topology/NVLink/P2P"
-bash "$EXTRAS/p2p.sh" "$OUT/m10-topology" 2>&1 | tee -a "$LOG"
-phase_done "M10"
+# ============================ H6 power report ==============================
+phase "H6 power / tokens-per-joule (from the H2 bracket)"
+if [ -f "$OUT/h6-power/bracket-262k.txt" ]; then
+  read -r t0 t1 < "$OUT/h6-power/bracket-262k.txt"
+  toks=$(cat "$OUT/h6-power/tokens-262k.txt" 2>/dev/null || echo 0)
+  python3 "$EXTRAS/power-report.py" --samples "$OUT/h6-power/cell-262k.csv" \
+    --start "$t0" --end "$t1" --tokens "${toks:-0}" \
+    --idle "$OUT/h6-power/idle.csv" --json-out "$OUT/h6-power/power-262k.json" \
+    >"$OUT/h6-power/report.txt" 2>&1 || log "H6 power report failed"
+  phase_done "H6"
+else
+  skip "H6 (no H2 bracket; H2 did not run)"
+fi
 
 # ============================ M7 KV dtypes =================================
 if need 30 "M7 KV dtypes 262k"; then
@@ -252,7 +257,7 @@ if need 30 "M7 KV dtypes 262k"; then
      bash "$HELPER/knob-sweep.sh" --model iq3s --node "$(hostname)" \
        --gpus 0,1,2,3 --contexts 262144 --batches 1 --max-context 262144 \
        --max-tokens 128 --variants basefull,kvq4_0,kvk8v4 \
-       --outdir "$OUT/m7-kv-262k" --budget-min 35 \
+       --outdir "$OUT/m7-kv-262k" --budget-min 45 \
        >"$OUT/m7-kv-262k/runner.log" 2>&1; then
     phase_done "M7"
   else
@@ -302,6 +307,11 @@ if need 35 "M9 Coder batch-MTP/lookup"; then
     skip "M9 (Coder staging failed)"
   fi
 fi
+
+# ============================ M10 topology =================================
+phase "M10 topology/NVLink/P2P"
+bash "$EXTRAS/p2p.sh" "$OUT/m10-topology" 2>&1 | tee -a "$LOG"
+phase_done "M10"
 
 # ============================ H1 Coder (if time) ===========================
 if [ "$CODER_OK" = 1 ] && need 20 "H1 Coder quality"; then
