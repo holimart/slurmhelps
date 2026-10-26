@@ -136,7 +136,7 @@ if [ -f "$PACKS/iq3s/$I3S1" ] && [ -f "$PACKS/iq3s/$I3S2" ]; then
       python3 "$EXTRAS/niah.py" \
         --base-url "$(server_base)" --model "$SERVER_MODEL" \
         --contexts 65536,131072,262144 --positions 10,50,90 --repeats 2 \
-        --max-context 262144 --max-tokens 32 --tool-canary \
+        --max-context 262144 --max-tokens 512 --tool-canary \
         --json-out "$OUT/h1-quality/iq3s/cells.jsonl" \
         --summary-out "$OUT/h1-quality/iq3s/summary.csv" \
         --metrics-out "$OUT/h1-quality/iq3s/metrics.jsonl" \
@@ -322,7 +322,7 @@ if [ "$CODER_OK" = 1 ] && need 20 "H1 Coder quality"; then
     python3 "$EXTRAS/niah.py" \
       --base-url "$(server_base)" --model "$SERVER_MODEL" \
       --contexts 65536,131072 --positions 10,50,90 --repeats 2 \
-      --max-context 131072 --max-tokens 32 --tool-canary \
+      --max-context 131072 --max-tokens 512 --tool-canary \
       --json-out "$OUT/h1-quality/coder/cells.jsonl" \
       --summary-out "$OUT/h1-quality/coder/summary.csv" \
       --metrics-out "$OUT/h1-quality/coder/metrics.jsonl" \
@@ -344,7 +344,7 @@ if [ "$CODER_OK" = 1 ] && need 20 "H1 Q2_0 quality"; then
       python3 "$EXTRAS/niah.py" \
         --base-url "$(server_base)" --model "$SERVER_MODEL" \
         --contexts 65536,131072 --positions 10,50,90 --repeats 2 \
-        --max-context 131072 --max-tokens 32 --tool-canary \
+        --max-context 131072 --max-tokens 512 --tool-canary \
         --json-out "$OUT/h1-quality/q2_0/cells.jsonl" \
         --summary-out "$OUT/h1-quality/q2_0/summary.csv" \
         --metrics-out "$OUT/h1-quality/q2_0/metrics.jsonl" \

@@ -68,11 +68,14 @@ def corpus(nchars):
     return (CORPUS * reps)[:nchars]
 
 
-def build_prompt(chars, fraction, salt):
-    filler = corpus(chars)
+def build_prompt(chars, fraction, salt, ctx):
+    # Use the canonical probe's filler: its line numbers and fixed word list
+    # are what the two-point calibration measures, so the real prompt token
+    # count lands at the requested context.  A natural-language repeated
+    # corpus tokenizes at ~5.8 chars/token and produced half-size prompts.
+    filler = sp.build_filler(chars, salt, ctx)
     pos = int(len(filler) * fraction / 100.0)
-    return ("[document %s]\n\n%s\n\n%s\n\n%s%s"
-            % (salt, filler[:pos], NEEDLE, filler[pos:], QUESTION))
+    return (filler[:pos] + "\n\n" + NEEDLE + "\n\n" + filler[pos:] + QUESTION)
 
 
 def stream(base, model, body, timeout):
@@ -169,26 +172,32 @@ def stream(base, model, body, timeout):
 
 def ask_needle(base, model, ctx, fraction, repeat, chars, max_tokens, timeout):
     salt = uuid.uuid4().hex[:12]
-    prompt = build_prompt(chars, fraction, salt)
+    prompt = build_prompt(chars, fraction, salt, ctx)
     body = {"model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens, "temperature": 0, "stream": True,
             "stream_options": {"include_usage": True}}
     r = stream(base, model, body, timeout)
     answer = (r["text"] or "").strip()
+    reasoning = (r["reasoning"] or "").strip()
     tail = answer[-300:]
+    rtail = reasoning[-300:]
     correct = KEY.lower() in answer.lower()
+    correct_any = correct or KEY.lower() in reasoning.lower()
+    answered_in = "content" if correct else ("reasoning" if correct_any else "none")
     return {"kind": "needle", "context": ctx, "position": fraction,
             "repeat": repeat, "salt": salt, "expected": KEY,
-            "answer_tail": tail, "correct": correct,
+            "answer_tail": tail, "reasoning_tail": rtail,
+            "correct": correct, "correct_any": correct_any,
+            "answered_in": answered_in,
             "prompt_chars": len(prompt), **r}
 
 
 def ask_tool(base, model, ctx, chars, timeout):
     salt = uuid.uuid4().hex[:12]
-    prompt = ("[document %s]\n\n%s\n\nUse the read_file tool to read the file "
-              "/etc/hostname. You must call the tool; do not answer in prose."
-              % (salt, corpus(chars)))
+    prompt = (sp.build_filler(chars, salt, ctx)
+              + "\n\nUse the read_file tool to read the file /etc/hostname. "
+                "You must call the tool; do not answer in prose.")
     out = {"kind": "tool", "context": ctx, "position": None, "repeat": 1,
            "salt": salt, "expected": "read_file",
            "tool_choice_used": None, "correct": False}
@@ -220,7 +229,8 @@ def main():
     ap.add_argument("--positions", default="10,50,90")
     ap.add_argument("--repeats", type=int, default=2)
     ap.add_argument("--max-context", type=int, default=262144)
-    ap.add_argument("--max-tokens", type=int, default=32)
+    ap.add_argument("--max-tokens", type=int, default=512,
+                    help="a thinking model needs room for reasoning before the answer")
     ap.add_argument("--pad-safety", type=int, default=128)
     ap.add_argument("--overhead-tokens", type=int, default=384,
                     help="tokens reserved for the needle/question/header")
@@ -282,26 +292,28 @@ def main():
 
     with open(args.summary_out, "w") as sf:
         sf.write("ctx,kind,position,repeat,prompt_tokens,ttft_s,decode_tok_s,"
-                 "correct,answer_tail,error\n")
+                 "correct,correct_any,answered_in,answer_tail,error\n")
         for r in rows:
             def num(v):
                 return "%.3f" % v if isinstance(v, (int, float)) else ""
             tail = (r.get("answer_tail") or "").replace(",", " ").replace("\n", " ")[:200]
             err = (r.get("error") or "").replace(",", " ").replace("\n", " ")[:200]
-            sf.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
+            sf.write("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n" % (
                 r["context"], r["kind"], r.get("position", ""), r.get("repeat", ""),
                 r.get("prompt_tokens") or "", num(r.get("ttft_s")),
-                num(r.get("decode_tok_s")), r.get("correct"), tail, err))
+                num(r.get("decode_tok_s")), r.get("correct"),
+                r.get("correct_any"), r.get("answered_in", ""), tail, err))
 
     acc = {}
     for r in rows:
         key = (r["context"], r["kind"])
-        a = acc.setdefault(key, [0, 0])
+        a = acc.setdefault(key, [0, 0, 0])
         a[0] += 1
         a[1] += 1 if r.get("correct") else 0
-    print("[niah] accuracy:")
-    for (ctx, kind), (n, c) in sorted(acc.items()):
-        print("  ctx=%d %-6s %d/%d" % (ctx, kind, c, n))
+        a[2] += 1 if r.get("correct_any") else 0
+    print("[niah] accuracy (content / content+reasoning):")
+    for (ctx, kind), (n, c, ca) in sorted(acc.items()):
+        print("  ctx=%d %-6s %d/%d / %d/%d" % (ctx, kind, c, n, ca, n))
 
 
 if __name__ == "__main__":
