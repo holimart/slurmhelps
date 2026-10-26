@@ -514,6 +514,7 @@ Harness/doc commits on branch `serve-time-36h`:
 - `44bba48` — Q2_0 pack, `--cells`/`--warm-cells`, explicit baseline recipe,
   sm_70 kernel variants.
 - `c194099` — parallel staging of the two single-striped shards.
+- `83b750b` — the one-allocation campaign wrapper (`experiments/2026-10-26-v100-run.sh`).
 - `aec6f8a` — this document (residency, 256k, warm, kernel sweep).
 - `e6b183d` — full knob-sweep appendix and the warm-method note.
 - `98ea07b` — doc fixes (expert-cache size, KV wording, baseline prompt ratio).
