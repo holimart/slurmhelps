@@ -18,6 +18,8 @@ knob-sweep.sbatch             Slurm entry point (execs knob-sweep.sh)
 knob-sweep.sh                 one-knob-at-a-time sweep at small contexts
 warm-cache.sbatch             Slurm entry point (execs warm-cache.sh)
 warm-cache.sh                 warm (cache-reuse) TTFT rerun of the baseline recipe
+chain-cache.sbatch            Slurm entry point (execs chain-cache.sh)
+chain-cache.sh                checkpoint chain: one growing prompt, one JSONL line per turn
 strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run;
                               --mode cold|warm, cold is the default)
 tests/stub_server.py          fake server for --self-test (127.0.0.1 only;
@@ -272,6 +274,39 @@ at 64k; 8 GiB/4 slots held four 64k conversations) and warm TTFT was
 0.057–0.150 s on L40 (98× at 64k) and 0.268–0.543 s on V100 (20× at 16k).
 Details in `experiments/2026-10-25-strata-smoke-matrix.md` and
 `/work/ffa/holecem/strata-runs/2026-10-25-warm/NOTES.md`.
+
+## Checkpoint chain (prefix growth)
+
+`chain-cache.sh` measures the case an agent loop has: **one conversation whose
+prompt grows**. It uses the canonical probe `llm/bench/probe.py --mode chain`
+(the upstream `strata_probe.py` here is frozen at the pre-chain copy), one
+fixed salt, one sequential slot, and a stop ladder. Each turn's prompt is the
+previous prompt plus appended filler, so turns after the first should reuse the
+previous checkpoint and prefill only the delta. One JSONL line is written per
+turn with `stop`, `prev_stop`, `prompt_tokens`, engine `reused_tokens`,
+`reuse_fraction`, `ttft_s`, `prefill_s`, `prefill_delta_tokens`, strict
+`decode_s`/`tpot_ms`/`decode_tok_s_strict`, `decode_tok_s`, `aggregate_tok_s`
+and `status`; `summary.csv` gets one row per turn.
+
+```bash
+llm/strata/chain-cache.sh --plan --model iq3s
+llm/strata/chain-cache.sh --self-test      # stub: prefix growth + reuse + strict timing
+
+sbatch --nice=100 --nodelist=uk-g6-02 llm/strata/chain-cache.sbatch \
+  --model iq3s --node uk-g6-02 --max-context 262144 \
+  --stops 1024,100000,200000,262144 --tokens-per-turn 512 \
+  --chain-last-repeats 1 --outdir /work/ffa/holecem/strata-runs/2026-10-26-chain
+```
+
+Measured 2026-10-26 (IQ3_S + Coder, 1× L40S): checkpoint reuse engaged at
+**8,192-token granularity** — the 200k and 262k turns reused 98,304 and
+196,608 tokens (the previous prompt's last complete block), while the 100k
+turn reused 0 because the 1k seed is smaller than one block. An exact repeat at
+261k reused 261,050 = prompt−5 in 0.415 s. TTFT fell from cold 48.6 s → 25.9 s
+at 200k and 63.8 s → 17.7 s at 261k; strict decode stayed 116–129 tok/s
+(TPOT 7.7–8.7 ms). Details, cold comparison and caveats:
+`experiments/2026-10-26-chain.md` and
+`/work/ffa/holecem/strata-runs/2026-10-26-chain/NOTES.md`.
 
 ## Gotchas
 
