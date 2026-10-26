@@ -512,7 +512,9 @@ Harness/doc commits on branch `serve-time-36h`:
 - `44bba48` — Q2_0 pack, `--cells`/`--warm-cells`, explicit baseline recipe,
   sm_70 kernel variants.
 - `c194099` — parallel staging of the two single-striped shards.
-- (this doc + the one-allocation wrapper: see the commit that adds this file)
+- `aec6f8a` — this document (residency, 256k, warm, kernel sweep).
+- `e6b183d` — full knob-sweep appendix and the warm-method note.
+- `98ea07b` — doc fixes (expert-cache size, KV wording, baseline prompt ratio).
 
 Q2_0 manifest entries were appended to
 `/work/ffa/holecem/models/strata/manifest.txt` (2026-10-26): shard 1 verified
