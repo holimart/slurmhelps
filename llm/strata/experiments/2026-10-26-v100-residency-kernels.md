@@ -364,11 +364,12 @@ the same workload (18.81 s in `basefull`), so it is not a stable control.
   reproduces the maintainer's “22.8 → 21.2 ms per verify window” on this
   exact card and is worth turning on for single-stream serving.
 - **`STRATA_PF_WMMA=1` (FP16 tensor-core prompt experts) helps the prompt
-  path**: +2.2 % aggregate and −1.7 % TTFT on the 1k/4k mean, +9.1 % decode
-  at 4k C1 (the one decode cell where prompt-expert work is still in flight),
-  +2.8 % decode at 16k C1. Note this changes the expert arithmetic (FP16
-  activations instead of MMQ q8_1), so it is not bit-identical; the V100 doc
-  already warns answers can differ.
+  path**: +2.2 % aggregate and −1.7 % TTFT on the 1k/4k mean, +2.8 % decode
+  at 16k C1. It is a prefill kernel, so the aggregate/TTFT move is the
+  reliable signal; the +9.1 % decode at 4k C1 is a single-cell outlier
+  (decode should not be affected) and is not read as a decode win. Note this
+  changes the expert arithmetic (FP16 activations instead of MMQ q8_1), so
+  it is not bit-identical; the V100 doc already warns answers can differ.
 - **`STRATA_GR_NORM_FAST=1` / `STRATA_ARGMAX_ROWS_SM70=1`** produce the
   expected small positive decode effect (+2 % class) but only at C1; at C4
   they are inside noise. Both are bitwise per the V100 doc; safe to enable,
