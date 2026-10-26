@@ -22,8 +22,8 @@
 # never run the real matrix on the login node.
 #
 # Usage:
-#   bench-matrix.sh [--model iq3s|coder|both] [--contexts 1024,4096]
-#                   [--batches 1,4] [--gpus 0,1] [--max-tokens N]
+#   bench-matrix.sh [--model iq3s|coder|q2_0|both] [--contexts 1024,4096]
+#                   [--batches 1,4] [--cells "1024:1,65536:1"] [--gpus 0,1] [--max-tokens N]
 #                   [--requests-per-slot N] [--outdir DIR] [--budget-min MIN]
 #                   [--self-test]
 #
@@ -33,6 +33,14 @@
 #                         1024,4096,16384,65536 — docs/NVIDIA_V100.md)
 #   --batches LIST       concurrent clients per cell, comma-separated
 #                        (default "1,4"; strata launch caps --parallel at 8)
+#   --cells SPEC         explicit ctx:concurrency cells, e.g.
+#                        "1024:1,1024:4,65536:1"; overrides --contexts/--batches
+#                        (needed when only one context gets C4, or only one
+#                        131072 cell is affordable)
+#   --warm-cells SPEC    after the cold matrix, run the same cells in warm mode
+#                        (one saltless request + --warm-repeats identical ones;
+#                        see strata_probe.py) and write summary-warm.csv
+#   --warm-repeats N     identical warm repeats after the cold one (default 3)
 #   --gpus LIST          GPU numbers for strata launch --gpu, e.g. 0,1
 #                        (default: auto / one card; GPUS_PER_NODE=2 -> 0,1)
 #   --max-tokens N       completion length per request (default 128)
@@ -92,6 +100,9 @@ CXX_LIB_DIR=${CXX_LIB_DIR:-/work/ffa/holecem/strata-runs/2026-10-25-l40x1/deps/c
 MODEL=${MODEL_NAME:-${MODEL:-both}}
 CTXS=${CTXS:-1024,4096}
 BATCHES=${BATCHES:-1,4}
+CELLS=${CELLS:-}
+WARM_CELLS=${WARM_CELLS:-}
+WARM_REPEATS=${WARM_REPEATS:-3}
 MAX_TOKENS=${MAX_TOKENS:-128}
 RPS=${RPS:-3}
 BUDGET_MIN=${BUDGET_MIN:-420}
@@ -108,6 +119,12 @@ while [ $# -gt 0 ]; do
     --contexts=*) CTXS=${1#*=}; shift ;;
     --batches) BATCHES=${2:?--batches needs e.g. 1,4}; shift 2 ;;
     --batches=*) BATCHES=${1#*=}; shift ;;
+    --cells) CELLS=${2:?--cells needs e.g. 1024:1,4096:4}; shift 2 ;;
+    --cells=*) CELLS=${1#*=}; shift ;;
+    --warm-cells) WARM_CELLS=${2:?--warm-cells needs e.g. 65536:1}; shift 2 ;;
+    --warm-cells=*) WARM_CELLS=${1#*=}; shift ;;
+    --warm-repeats) WARM_REPEATS=${2:?}; shift 2 ;;
+    --warm-repeats=*) WARM_REPEATS=${1#*=}; shift ;;
     --gpus) GPU_LIST=${2:?--gpus needs e.g. 0,1}; shift 2 ;;
     --gpus=*) GPU_LIST=${1#*=}; shift ;;
     --max-tokens) MAX_TOKENS=${2:?}; shift 2 ;;
@@ -126,8 +143,9 @@ done
 case "${MODEL,,}" in
   iq3s|iq3_s) MODEL=iq3s ;;
   coder|iq1_m) MODEL=coder ;;
+  q2_0|q20) MODEL=q2_0 ;;
   both|all) MODEL=both ;;
-  *) echo "bench-matrix: MODEL_NAME/MODEL/--model must be iq3s|coder|both (got '$MODEL')" >&2; exit 2 ;;
+  *) echo "bench-matrix: MODEL_NAME/MODEL/--model must be iq3s|coder|q2_0|both (got '$MODEL')" >&2; exit 2 ;;
 esac
 if ! [[ "$GPUS_PER_NODE" =~ ^[0-9]+$ ]] || [ "$GPUS_PER_NODE" -lt 1 ]; then
   echo "bench-matrix: GPUS_PER_NODE must be a positive integer (got '$GPUS_PER_NODE')" >&2
@@ -142,10 +160,41 @@ elif [ "$GPUS_PER_NODE" -gt 1 ]; then
   GPU_LIST=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
 fi
 list_max() { printf '%s\n' "${1//,/ }" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -n | tail -1; }
-MAXCTX=$(list_max "$CTXS"); MAXPAR=$(list_max "$BATCHES")
-[ -n "$MAXCTX" ] && [ -n "$MAXPAR" ] || { echo "bench-matrix: --contexts/--batches need numbers" >&2; exit 2; }
+# Cell plan: "ctx C" lines.  --cells wins over --contexts/--batches.
+cell_plan() {
+  local spec=${1:-$CELLS} ctx c
+  if [ -n "$spec" ]; then
+    printf '%s\n' "${spec//,/$'\n'}" | tr ':' ' '
+    return 0
+  fi
+  for ctx in ${CTXS//,/ }; do
+    for c in ${BATCHES//,/ }; do
+      printf '%s %s\n' "$ctx" "$c"
+    done
+  done
+}
+while read -r ctx c; do
+  [ -n "$ctx" ] || continue
+  [[ "$ctx" =~ ^[0-9]+$ ]] && [[ "$c" =~ ^[0-9]+$ ]] \
+    || { echo "bench-matrix: bad cell '$ctx:$c'" >&2; exit 2; }
+done < <(cell_plan)
+if [ -n "$WARM_CELLS" ]; then
+  while read -r ctx c; do
+    [ -n "$ctx" ] || continue
+    [[ "$ctx" =~ ^[0-9]+$ ]] && [[ "$c" =~ ^[0-9]+$ ]] \
+      || { echo "bench-matrix: bad warm cell '$ctx:$c'" >&2; exit 2; }
+  done < <(cell_plan "$WARM_CELLS")
+fi
+MAXCTX=$( { cell_plan; if [ -n "$WARM_CELLS" ]; then cell_plan "$WARM_CELLS"; fi; } \
+          | awk '{print $1}' | sort -n | tail -1 )
+MAXPAR=$(cell_plan | awk '{print $2}' | sort -n | tail -1)
+[ -n "$MAXCTX" ] && [ -n "$MAXPAR" ] || { echo "bench-matrix: --contexts/--batches/--cells need numbers" >&2; exit 2; }
 if [ "$MAXPAR" -gt 8 ]; then
   echo "bench-matrix: --batches capped at 8 (strata launch --parallel range)" >&2; MAXPAR=8
+fi
+if ! [[ "$WARM_REPEATS" =~ ^[0-9]+$ ]] || [ "$WARM_REPEATS" -lt 1 ]; then
+  echo "bench-matrix: --warm-repeats must be an integer >= 1 (got '$WARM_REPEATS')" >&2
+  exit 2
 fi
 
 JOB=${SLURM_JOB_ID:-selftest}
@@ -188,6 +237,17 @@ archive_engine_logs() {
   [ -d "$XDG_STATE_HOME/strata" ] || return 0
   mkdir -p "$dest" 2>/dev/null || return 0
   cp -a "$XDG_STATE_HOME/strata/." "$dest/" 2>/dev/null || true
+  local out=$OUTDIR/${CUR_MODEL:-unknown} elog
+  # Placement evidence (experiment C): the engine start line (argv, layer
+  # split) plus the residency lines.  Kept even when the server later dies.
+  elog=$(ls -1t "$XDG_STATE_HOME"/strata/launch/*.engine.log 2>/dev/null | head -1 || true)
+  if [ -n "$elog" ]; then
+    grep -m1 "engine started:" "$elog" > "$out/engine-argv.txt" 2>/dev/null || true
+    grep -E "layer split|experts resident|expert cache [0-9]+ slots|KV streaming:|host->device|PCIe|VRAM|GPU [0-9]+:" "$elog" \
+      | head -80 > "$out/engine-facts.txt" 2>/dev/null || true
+    local cfg; cfg=$(ls -1t "$dest"/launch/*.json 2>/dev/null | head -1 || true)
+    [ -n "$cfg" ] && cp "$cfg" "$out/launch-config.json" 2>/dev/null || true
+  fi
   log "archived engine logs to $dest"
 }
 
@@ -347,17 +407,51 @@ PY
 }
 
 # ---- server control -----------------------------------------------------------
+# Guard against the shared install config drifting from the pinned recipe: the
+# engine's own start line is the evidence (it names the drafter and --batch).
+verify_engine_recipe() {
+  local elog line want
+  elog=$(ls -1t "$XDG_STATE_HOME"/strata/launch/*.engine.log 2>/dev/null | head -1 || true)
+  if [ -z "$elog" ]; then
+    log "WARN: no engine log yet; cannot verify --mtp/--batch recipe"
+    return 0
+  fi
+  line=$(grep -m1 "engine started:" "$elog" || true)
+  if [ -z "$line" ]; then
+    log "WARN: engine log has no 'engine started:' line; recipe unverified"
+    return 0
+  fi
+  for want in "--mtp " "--batch 4" "--kv int8" "--kv-resident 32768" \
+              "--expert-cache auto" "--spec 4" "--spec-min-p 0.5"; do
+    case "$line" in
+      *"$want"*) ;;
+      *) log "FATAL: engine argv is missing '$want' (shared install config drift?)"
+         log "       $line"; return 1 ;;
+    esac
+  done
+  case "$line" in
+    *"--layer-split"*) log "engine recipe verified (layer split): --mtp --batch 4 --kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
+    *) log "engine recipe verified: --mtp --batch 4 --kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
+  esac
+}
+
 launch_strata_server() { # model_dir port
   local dir=$1 port=$2 logf=$OUTDIR/$CUR_MODEL/launch-$(date -u +%H%M%S).log
   local gpu_args=()
   [ -n "$GPU_LIST" ] && gpu_args=(--gpu "$GPU_LIST")
   mkdir -p "$OUTDIR/$CUR_MODEL"
-  log "launch: strata launch --model-path $dir --context $MAXCTX --parallel $MAXPAR${GPU_LIST:+ --gpu $GPU_LIST} --kv int8 --vision off --access local --port $port --data-dir $DATA_DIR (log $logf)"
+  # The baseline recipe is passed EXPLICITLY (--set is the launch CLI's
+  # advanced-setting channel) instead of trusting the shared installed config:
+  # `strata launch` persists choices in install/strata-<pack>.json, and a
+  # concurrent launch can strip --mtp or change a knob.  --parallel 4 becomes
+  # the engine's --batch 4; passing --set batch too is refused as a conflict.
+  log "launch: strata launch --model-path $dir --context $MAXCTX --parallel $MAXPAR --mtp on${GPU_LIST:+ --gpu $GPU_LIST} --kv int8 --data-dir $DATA_DIR --set kv-resident=32768 --set expert-cache=auto --set prefill=auto --set ple-io=ram --set spec=4 --set spec-min-p=0.5 --set mtp=$DATA_DIR/mtp/rt (log $logf)"
   mkdir -p "$DATA_DIR"
-  "$STRATA_ROOT/bin/strata" launch \
+  if ! "$STRATA_ROOT/bin/strata" launch \
     --model-path "$dir" \
     --context "$MAXCTX" \
     --parallel "$MAXPAR" \
+    --mtp on \
     ${gpu_args[@]+"${gpu_args[@]}"} \
     --kv int8 \
     --vision off \
@@ -365,7 +459,14 @@ launch_strata_server() { # model_dir port
     --port "$port" \
     --no-api-key \
     --data-dir "$DATA_DIR" \
-    --yes --no-tui --restart >"$logf" 2>&1
+    --yes --no-tui --restart \
+    --set kv-resident=32768 --set expert-cache=auto --set prefill=auto \
+    --set ple-io=ram --set spec=4 --set spec-min-p=0.5 \
+    --set "mtp=$DATA_DIR/mtp/rt" >"$logf" 2>&1; then
+    log "launch failed; tail of $logf:"
+    tail -n 20 "$logf" || true
+    return 1
+  fi
   SERVER=strata
   if ! wait_ready "$port"; then
     log "server not ready after ${READY_TIMEOUT_S}s; tail of $logf:"
@@ -376,6 +477,7 @@ launch_strata_server() { # model_dir port
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)
   [ -n "$SERVER_MODEL" ] || SERVER_MODEL=strata
   log "server ready on 127.0.0.1:$port, model id: $SERVER_MODEL"
+  verify_engine_recipe || return 1
 }
 
 stop_strata_server() {
@@ -405,6 +507,8 @@ size_of() { case "$1" in
   Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf) echo 28800138432 ;;
   Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf) echo 29608446496 ;;
   Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf) echo 28800138432 ;;
+  Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf) echo 37623740192 ;;
+  Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf) echo 28800138432 ;;
   *) echo 0 ;;
 esac }
 
@@ -420,6 +524,10 @@ prepare_model_dir() { # model_name -> sets CUR_DIR
            want=(Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf
                  Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf)
            cands=("$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M") ;;
+    q2_0)  sub=q2_0
+           want=(Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf
+                 Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf)
+           cands=("$MODELS_ROOT/q2_0" "$MODELS_ROOT/models/Q2_0") ;;
     *) echo "bench-matrix: unknown model $1" >&2; return 2 ;;
   esac
   dir=""
@@ -468,9 +576,9 @@ run_matrix() { # port ; uses CUR_MODEL/CUR_DIR/SERVER_MODEL, OUTDIR
   cells=$cells_dir/cells.jsonl
   csv=$cells_dir/summary.csv
   [ -f "$csv" ] || echo "ctx,concurrency,decode_tok_s_p50,aggregate_tok_s,ttft_s_p50,ttft_s_p95,status" > "$csv"
-  t0=$(date +%s)
-  for ctx in ${CTXS//,/ }; do
-    for c in ${BATCHES//,/ }; do
+  t0=${JOB_START:-$(date +%s)}
+  while read -r ctx c; do
+      [ -n "$ctx" ] || continue
       now=$(date +%s)
       if [ $(((now - t0) / 60)) -ge "$BUDGET_MIN" ]; then
         log "budget ${BUDGET_MIN}min reached — remaining cells skipped (ctx=$ctx C=$c ...)"
@@ -512,10 +620,65 @@ run_matrix() { # port ; uses CUR_MODEL/CUR_DIR/SERVER_MODEL, OUTDIR
       f=$(csv_fields "$cells" "$before")
       echo "$ctx,$c,$f,$status" >> "$csv"
       log "cell ctx=$ctx C=$c -> $status"
-    done
-  done
+  done < <(cell_plan)
   cp "$cells" "$OUTDIR/cells-$CUR_MODEL.jsonl" 2>/dev/null || true
   cp "$csv" "$OUTDIR/summary-$CUR_MODEL.csv" 2>/dev/null || true
+}
+
+# ---- warm pass (prompt-cache reuse; optional) --------------------------------
+warm_csv_fields() { # cells.jsonl lineno_before
+  local f=$1 before=$2
+  if [ "$(jsonl_lines "$f")" -le "$before" ]; then echo ",,,,,"; return; fi
+  python3 - "$f" <<'PY'
+import json, sys
+lines = [l for l in open(sys.argv[1]) if l.strip()]
+try:
+    d = json.loads(lines[-1])
+except Exception:
+    d = {}
+def f(k):
+    v = d.get(k)
+    return "%.2f" % v if isinstance(v, (int, float)) else ""
+print(",".join([f("ttft_cold_s"), f("ttft_warm_s_p50"), f("ttft_warm_s_p95"),
+                f("warm_ttft_speedup"), f("reused_tokens_p50")]))
+PY
+}
+
+run_warm_matrix() { # port ; optional second pass after run_matrix
+  [ -n "$WARM_CELLS" ] || return 0
+  local port=$1 ctx c f status rc t0 now cells_dir cells csv before
+  cells_dir=$OUTDIR/$CUR_MODEL
+  cells=$cells_dir/warm-cells.jsonl
+  csv=$cells_dir/summary-warm.csv
+  [ -f "$csv" ] || echo "ctx,concurrency,ttft_cold_s,ttft_warm_s_p50,ttft_warm_s_p95,warm_speedup,reused_tokens_p50,status" > "$csv"
+  t0=${JOB_START:-$(date +%s)}
+  while read -r ctx c; do
+      [ -n "$ctx" ] || continue
+      now=$(date +%s)
+      if [ $(((now - t0) / 60)) -ge "$BUDGET_MIN" ]; then
+        log "warm budget ${BUDGET_MIN}min reached — remaining warm cells skipped (ctx=$ctx C=$c ...)"
+        echo "$ctx,$c,,,,,,skipped-budget" >> "$csv"
+        continue
+      fi
+      if [ "$SERVER" != stub ] && ! server_alive "$port"; then
+        log "warm: server is down before ctx=$ctx C=$c"
+        echo "$ctx,$c,,,,,,server-dead" >> "$csv"
+        continue
+      fi
+      before=$(jsonl_lines "$cells")
+      log "warm cell ctx=$ctx C=$c (repeats=$WARM_REPEATS max_tokens=$MAX_TOKENS)"
+      rc=0
+      timeout $((90 + (WARM_REPEATS + 1) * 1800)) python3 "$PROBE" \
+        --base-url "http://127.0.0.1:$port" --model "$SERVER_MODEL" \
+        --context "$ctx" --concurrency "$c" --max-context "$MAXCTX" \
+        --max-tokens "$MAX_TOKENS" --mode warm --warm-repeats "$WARM_REPEATS" \
+        --requests-per-slot 1 --json-out "$cells" || rc=$?
+      case $rc in 0) status=ok ;; 1) status=fail ;; *) status="rc-$rc" ;; esac
+      f=$(warm_csv_fields "$cells" "$before")
+      echo "$ctx,$c,$f,$status" >> "$csv"
+      log "warm cell ctx=$ctx C=$c -> $status"
+  done < <(cell_plan "$WARM_CELLS")
+  cp "$csv" "$OUTDIR/summary-warm-$CUR_MODEL.csv" 2>/dev/null || true
 }
 
 # ---- self test --------------------------------------------------------------------
@@ -613,7 +776,7 @@ PY
 if [ "$SELF_TEST" = 1 ]; then self_test; fi
 
 mkdir -p "$OUTDIR"
-log "run: job=$JOB model=$MODEL contexts=$CTXS batches=$BATCHES max_tokens=$MAX_TOKENS rps=$RPS budget=${BUDGET_MIN}min outdir=$OUTDIR"
+log "run: job=$JOB model=$MODEL contexts=$CTXS batches=$BATCHES cells=${CELLS:-auto} window=$MAXCTX parallel=$MAXPAR max_tokens=$MAX_TOKENS rps=$RPS budget=${BUDGET_MIN}min outdir=$OUTDIR"
 
 if [ -z "${SLURM_JOB_ID:-}" ]; then
   log "FATAL: no SLURM_JOB_ID — the real matrix belongs on a GPU node (sbatch strata-bench.sbatch)."
@@ -644,6 +807,7 @@ fi
 
 models=both
 [ "$MODEL" = both ] && models="iq3s coder" || models=$MODEL
+JOB_START=$(date +%s)
 for m in $models; do
   log "=== model pack: $m ==="
   prepare_model_dir "$m" || { log "skipping $m (staging failed)"; continue; }
@@ -653,14 +817,16 @@ for m in $models; do
     release_prepare_lock
     log "server for $m never became ready; recording failed matrix"
     mkdir -p "$OUTDIR/$m"
-    for ctx in ${CTXS//,/ }; do for c in ${BATCHES//,/ }; do
+    while read -r ctx c; do
+      [ -n "$ctx" ] || continue
       echo "$ctx,$c,,,,,server-dead" >> "$OUTDIR/$m/summary.csv"
-    done; done
+    done < <(cell_plan)
     stop_strata_server
     continue
   fi
   release_prepare_lock
   run_matrix "$port"
+  run_warm_matrix "$port"
   stop_strata_server
   archive_engine_logs
 done
