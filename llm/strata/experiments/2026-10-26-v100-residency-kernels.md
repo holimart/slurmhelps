@@ -521,7 +521,9 @@ Harness/doc commits on branch `serve-time-36h`:
 Q2_0 manifest entries were appended to
 `/work/ffa/holecem/models/strata/manifest.txt` (2026-10-26): shard 1 verified
 (`69820c02…b199b720`), shard 2 `316b46f3…61e113` by hardlink to the verified
-shared inode.
+shared inode. A full `fetch-models.sh --only q2_0 --verify` re-hashed both
+shards afterwards and returned **missing=0 corrupt=0**
+(2026-10-26T14:28:30Z, `q2_0-audit.log`).
 
 ## Cells not run, and why
 
