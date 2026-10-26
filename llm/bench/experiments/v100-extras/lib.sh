@@ -96,12 +96,18 @@ verify_recipe() { # engine log -> 0/1
 start_server() { # pack_dir window parallel gpus phase outdir
   local pack=$1 window=$2 par=$3 gpus=$4 phase=$5 out=$6
   SERVER_PHASE=$phase SERVER_PAR=$par SERVER_OUT=$out
-  SERVER_STATE="$out/state"
+  # Control's runtime state is a Unix-domain socket.  Lustre (/work) cannot
+  # bind one: a server whose STRATA_RUNTIME_DIR lived under the results tree
+  # died with "runtime operation wait expired" and never wrote an engine log
+  # (2026-10-27, job 38243607).  Keep every runtime tree on node-local /tmp and
+  # archive the logs to $out at stop.
+  local state_root=${STATE_ROOT:-/tmp/v100-extras-state-$JOB}
+  SERVER_STATE="$state_root/$phase"
   mkdir -p "$out" "$SERVER_STATE"
   export XDG_STATE_HOME="$SERVER_STATE"
-  export XDG_CONFIG_HOME="$out/config"
-  export STRATA_RUNTIME_DIR="$out/runtime"
-  export STRATA_PROFILE_DIR="$out/profile"
+  export XDG_CONFIG_HOME="$state_root/$phase-config"
+  export STRATA_RUNTIME_DIR="$state_root/$phase-runtime"
+  export STRATA_PROFILE_DIR="$state_root/$phase-profile"
   export STRATA_COMPONENTS_DIR="$STRATA_ROOT/components"
   mkdir -p "$XDG_CONFIG_HOME" "$STRATA_RUNTIME_DIR" "$STRATA_PROFILE_DIR"
 

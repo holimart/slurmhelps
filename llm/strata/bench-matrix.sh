@@ -421,17 +421,22 @@ verify_engine_recipe() {
     log "WARN: engine log has no 'engine started:' line; recipe unverified"
     return 0
   fi
-  for want in "--mtp " "--batch 4" "--kv int8" "--kv-resident 32768" \
-              "--expert-cache auto" "--spec 4" "--spec-min-p 0.5"; do
+  # --parallel N becomes --batch N for N>1; --parallel 1 emits no --batch flag.
+  local -a wants=("--mtp " "--kv int8" "--kv-resident 32768" \
+                  "--expert-cache auto" "--spec 4" "--spec-min-p 0.5")
+  [ "$MAXPAR" -gt 1 ] && wants+=("--batch $MAXPAR")
+  for want in "${wants[@]}"; do
     case "$line" in
       *"$want"*) ;;
       *) log "FATAL: engine argv is missing '$want' (shared install config drift?)"
          log "       $line"; return 1 ;;
     esac
   done
+  local batch_note=""
+  [ "$MAXPAR" -gt 1 ] && batch_note="--batch $MAXPAR "
   case "$line" in
-    *"--layer-split"*) log "engine recipe verified (layer split): --mtp --batch 4 --kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
-    *) log "engine recipe verified: --mtp --batch 4 --kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
+    *"--layer-split"*) log "engine recipe verified (layer split): --mtp ${batch_note}--kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
+    *) log "engine recipe verified: --mtp ${batch_note}--kv int8 --kv-resident 32768 --expert-cache auto --spec 4 --spec-min-p 0.5" ;;
   esac
 }
 

@@ -25,6 +25,7 @@ ROOT=${SLURMHELPS_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}
 EXTRAS=${V100_EXTRAS_DIR:-$ROOT/llm/bench/experiments/v100-extras}
 HELPER=${STRATAHELPER:-$ROOT/llm/strata}
 JOB=${SLURM_JOB_ID:?must run inside an allocation}
+NODE_SHORT=${NODE_SHORT:-volta05}
 MODELS=/work/ffa/holecem/models/strata
 DATA=$MODELS/_strata-data
 PACKS=/tmp/v100-extras-$JOB
@@ -68,7 +69,7 @@ others=$(squeue -w "$(hostname)" -h -o '%u %i %j' 2>/dev/null | awk -v me="$USER
 [ -n "$others" ] && log "WARN other jobs on $(hostname): $others"
 df -h /tmp | tail -1 | tee -a "$LOG"
 echo "phase,stage_s,load_s,wall_s" > "$OUT/timing.csv"
-echo "item,reason" > "$OUT/skipped.tsv"
+printf "item\treason\n" > "$OUT/skipped.tsv"
 
 # ---- staging ---------------------------------------------------------------
 stage_iq3s() {
@@ -222,7 +223,7 @@ if need 20 "H5 chain 4x"; then
   mkdir -p "$OUT/h5-chain-4x"
   if MODELS_ROOT="$PACKS" DATA_DIR="$DATA" COPY_MODELS=0 \
      SCRATCH_ROOT="/tmp/v100-x-$JOB-h5" \
-     bash "$HELPER/chain-cache.sh" --model iq3s --node "$(hostname)" \
+     bash "$HELPER/chain-cache.sh" --model iq3s --node "$NODE_SHORT" \
        --gpus 0,1,2,3 --stops 1024,100000,200000,262144 \
        --tokens-per-turn 512 --chain-last-repeats 1 --max-context 262144 \
        --outdir "$OUT/h5-chain-4x" --budget-min 50 \
@@ -254,7 +255,7 @@ if need 30 "M7 KV dtypes 262k"; then
   mkdir -p "$OUT/m7-kv-262k"
   if MODELS_ROOT="$PACKS" DATA_DIR="$DATA" COPY_MODELS=0 \
      SCRATCH_ROOT="/tmp/v100-x-$JOB-m7" \
-     bash "$HELPER/knob-sweep.sh" --model iq3s --node "$(hostname)" \
+     bash "$HELPER/knob-sweep.sh" --model iq3s --node "$NODE_SHORT" \
        --gpus 0,1,2,3 --contexts 262144 --batches 1 --max-context 262144 \
        --max-tokens 128 --variants basefull,kvq4_0,kvk8v4 \
        --outdir "$OUT/m7-kv-262k" --budget-min 45 \
@@ -272,7 +273,7 @@ if need 30 "M8 prefill chunks 131k"; then
   mkdir -p "$OUT/m8-prefill-131k"
   if MODELS_ROOT="$PACKS" DATA_DIR="$DATA" COPY_MODELS=0 \
      SCRATCH_ROOT="/tmp/v100-x-$JOB-m8" \
-     bash "$HELPER/knob-sweep.sh" --model iq3s --node "$(hostname)" \
+     bash "$HELPER/knob-sweep.sh" --model iq3s --node "$NODE_SHORT" \
        --gpus 0,1,2,3 --contexts 131072 --batches 1 --max-context 131072 \
        --max-tokens 128 --variants basefull,pf4096,pf8192,pf16384,cpushare_auto \
        --outdir "$OUT/m8-prefill-131k" --budget-min 35 \
@@ -293,7 +294,7 @@ if need 35 "M9 Coder batch-MTP/lookup"; then
     mkdir -p "$OUT/m9-batchmtp-lookup-coder"
     if MODELS_ROOT="$PACKS" DATA_DIR="$DATA" COPY_MODELS=0 \
        SCRATCH_ROOT="/tmp/v100-x-$JOB-m9" \
-       bash "$HELPER/knob-sweep.sh" --model coder --node "$(hostname)" \
+       bash "$HELPER/knob-sweep.sh" --model coder --node "$NODE_SHORT" \
          --gpus 0 --contexts 16384,65536 --batches 1,4 --max-context 65536 \
          --max-tokens 128 --variants basefull,batchmtp,lookup4 \
          --outdir "$OUT/m9-batchmtp-lookup-coder" --budget-min 40 \
