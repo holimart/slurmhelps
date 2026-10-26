@@ -81,9 +81,10 @@ strata serve: 11308 MiB of VRAM free (CUDA0), 8444 MiB (CUDA1)
 
 → **fully resident**, proven by the engine: both stage caches hold every one
 of the 12,288 profiled (layer, expert) pairs, 100 % of the routed mass; the
-`served` line says 100 % of experts resident. 22.9 GiB of the 64 GB is expert
-cache, 1.5 GiB is batch slots, the rest is dense weights, KV (32,768 of
-131,072 cells in VRAM; the rest in 0.77 GiB pinned RAM) and workspace.
+`served` line says 100 % of experts resident. 23.4 GiB of the 64 GB is expert
+cache (11.07 + 12.35 GiB), 1.54 GiB is batch slots; the rest is dense
+weights, KV (the engine streams 32,768 of 131,072 cells per QSA layer and
+prints 0.77 GiB of pinned K/V) and workspace.
 
 | ctx | C | decode p50 | decode p95 | aggregate | TTFT p50 | TTFT p95 | real ctx | status |
 |---:|--:|---:|---:|---:|---:|---:|---:|:--|
@@ -142,7 +143,7 @@ Q2_0 is the fastest pack at C1 short context (107.1 tok/s at 1k) and keeps
 
 ### 2× vs the 1× V100 baseline (Coder IQ1_M, same pack and recipe)
 
-The 1× column is the 2026-10-25 baseline (real prompts ~1.16-1.22× the
+The 1× column is the 2026-10-25 baseline (real prompts 1.14–1.23× the
 nominal, so TTFT is slightly pessimistic there).
 
 | ctx | C | decode 1× | decode 2× | Δ | agg 1× | agg 2× | Δ | TTFT 1× | TTFT 2× | Δ |
@@ -265,8 +266,10 @@ this campaign streamed experts.**
 KV is a separate axis: with `--kv-resident 32768` the K/V of the resident
 configs hit VRAM on 73–99 % of block reads (0.2–25 MiB read from pinned RAM
 per sample); that is the intended streaming KV mode, not expert paging. The
-full K/V also lives in pinned RAM (0.77 GiB at 131k window, ~1.5 GiB at
-262k) and the rest is read from there.
+engine prints “32768 of <window> cells per QSA layer in VRAM, the K/V in
+0.77 GiB of pinned RAM” at both the 131k and 262k windows, i.e. the same
+0.77 GiB resident share is kept while the window grows; the rest is read from
+pinned host memory as the 73–99 % hit rates show.
 
 ## D. Warm vs cold at the maximum contexts (4× resident IQ3_S)
 
