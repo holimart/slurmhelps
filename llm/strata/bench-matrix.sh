@@ -556,10 +556,21 @@ prepare_model_dir() { # model_name -> sets CUR_DIR
       return 4
     fi
     rm -rf "$JOB_SCRATCH"; mkdir -p "$JOB_SCRATCH"
-    log "copying $((need / 1073741824)) GiB of shards to $JOB_SCRATCH"
+    log "copying $((need / 1073741824)) GiB of shards to $JOB_SCRATCH (in parallel: the shards live on different OSTs)"
+    # The two shards are single-striped on different OSTs (shard1 on OST0/1,
+    # the shared 28.8 GB table on OST2).  Copying them in parallel overlaps the
+    # two OST reads instead of serialising them: this halves staging time.
+    local -a cp_pids=()
     for f in "${want[@]}"; do
       log "  cp $f"
-      cp "$dir/$f" "$JOB_SCRATCH/$f"
+      cp "$dir/$f" "$JOB_SCRATCH/$f" &
+      cp_pids+=($!)
+    done
+    for f in "${cp_pids[@]}"; do
+      if ! wait "$f"; then
+        log "FATAL: shard copy failed"
+        return 5
+      fi
     done
     CUR_DIR=$JOB_SCRATCH
   else
