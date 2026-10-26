@@ -51,7 +51,9 @@ def wait_ready(port, timeout=20.0):
 class ProbeStubTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.tmp = tempfile.mkdtemp(prefix="bench-probe-test-")
+        cls._tmpdir = tempfile.TemporaryDirectory(prefix="bench-probe-test-")
+        cls.addClassCleanup(cls._tmpdir.cleanup)
+        cls.tmp = cls._tmpdir.name
         cls.stub = subprocess.Popen(
             [sys.executable, str(STUB), "--port", "0",
              "--token-delay-ms", "5", "--prefill-ms-per-token", "0.2",
