@@ -81,7 +81,7 @@ while [ $# -gt 0 ]; do
     --time) TIME=${2:?}; shift 2 ;;
     --account) ACCOUNT=${2:?}; shift 2 ;;
     --self-test) SELF_TEST=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "strata.sh: unknown argument: $1" >&2; exit 2 ;;
   esac
 done

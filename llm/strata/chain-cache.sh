@@ -107,7 +107,7 @@ while [ $# -gt 0 ]; do
     --gpus=*) GPU_LIST=${1#*=}; shift ;;
     --plan) PLAN=1; shift ;;
     --self-test) SELF_TEST=1; shift ;;
-    -h|--help) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "chain-cache: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
