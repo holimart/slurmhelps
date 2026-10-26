@@ -116,7 +116,7 @@ if start_server "$PACKS/iq3s" 262144 4 0,1,2,3 h3b "$LOG_LOCAL/h3b-server"; then
       --json-out "$OUT/h3-multiconv-distinct/$ctx/cells.jsonl" \
       --summary-out "$OUT/h3-multiconv-distinct/$ctx/summary.csv" \
       --cache-out "$OUT/h3-multiconv-distinct/$ctx/cache.json" \
-      >"$OUT/h3-multiconv-distinct/$ctx/run.log" 2>&1 || log "H3b ctx=$ctx failed"
+      >"$LOG_LOCAL/h3b-$ctx.run.log" 2>&1 || log "H3b ctx=$ctx failed"
   done
   stop_server; archive_engine "$LOG_LOCAL/h3b-server"
 else
