@@ -474,11 +474,15 @@ class Doctor:
             same = util.sha256_file(probe) == util.sha256_file(upstream)
             text = probe.read_text(encoding="utf-8", errors="replace")
             calibrated = "calibrate_chars_per_token" in text and "--max-context" in text
-            self.add("footgun.probe", "ok" if (same and calibrated) else "warn",
-                     "probe.py %s upstream, calibration=%s" % (
-                         "matches" if same else "DIFFERS from", calibrated),
-                     None if (same and calibrated) else
-                     "copy llm/strata/strata_probe.py again (do not edit either file in place)",
+            chain = 'choices=("cold", "warm", "chain")' in text
+            healthy = calibrated and chain
+            self.add("footgun.probe", "ok" if healthy else "warn",
+                     "probe.py canonical=%s (chain=%s calibration=%s); upstream %s" % (
+                         healthy, chain, calibrated,
+                         "identical" if same else "is the frozen older copy"),
+                     None if healthy else
+                     "llm/bench/probe.py is canonical since 2026-10-26; restore "
+                     "--mode chain/--max-context support there",
                      group="footguns")
         self.add("footgun.slurm_export", "info",
                  "never put comma lists in sbatch --export (Slurm splits at commas); "

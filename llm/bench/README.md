@@ -8,7 +8,8 @@ the result artifacts back into tables.
 The backend scripts remain the source of truth for now:
 
 ```text
-llm/strata/{bench-matrix,knob-sweep,warm-cache}.sh   Strata matrix / knobs / warm
+llm/strata/{bench-matrix,knob-sweep,warm-cache,chain-cache}.sh
+                                                      Strata matrix / knobs / warm / chain
 llm/qwen38/{serve,measure}.sh + serve-container.sh    vLLM FP4 on Blackwell
 llm/qwen35/{serve,serve-server}.sh                    vLLM AWQ on A100
 llm/glm53-reap50/{bench,context-sweep,cache-sweep,submit,install}.sh
@@ -70,9 +71,9 @@ hardcoded in `benchlib/*.py`.
 
 ## Recipes
 
-Fourteen recipes cover what was actually run (plus one clearly-marked new
-definition). Each is validated against `schema.json`; a typo or an impossible
-cell fails before submission.
+Sixteen recipes cover what was actually run (plus clearly-marked new
+definitions). Each is validated against `schema.json`; a typo or an impossible
+cell/stop fails before submission.
 
 | recipe | backend/runner | hardware | what it reproduces |
 |---|---|---|---|
@@ -83,6 +84,8 @@ cell fails before submission.
 | `strata-v100-resident-4x` | strata/matrix, iq3s | 4x V100-32G | resident IQ3_S 1k-256k + warm 64k/128k/256k |
 | `strata-knobs` | strata/knobs, iq3s | 1x L40S, uk-g6-07 | one-knob variants at 1k/4k/16k |
 | `strata-warm` | strata/warm, iq3s | 1x L40S, uk-g6-06 | warm prompt-cache TTFT |
+| `strata-chain-l40` | strata/chain, iq3s | 1x L40S, uk-g6-02 | checkpoint chain 1k→100k→200k→262144, 512 tokens/turn |
+| `strata-chain-v100-4x` | strata/chain, iq3s | 4x V100-32G | **pending / not run**: same chain on resident 4x V100 |
 | `strata-sustained-512` | strata/matrix, iq3s | 1x L40S | **new, not yet run**: 512-token answers |
 | `qwen38-bw-fp4` | vllm/measure | 2x BW6000, bw01 | Qwen3.8 FP4 matrix against the container server |
 | `qwen35-ampere02` | vllm/measure | 2x A100, ampere02 | Qwen3.5-122B smoke matrix |
@@ -111,9 +114,29 @@ llm/bench/adapters/strata.sh --runner matrix --model coder \
   --gres gpu:1 --cpus 16 --mem 256G --time 11:30:00 --outdir /tmp/demo
 ```
 
-The adapter chooses `strata-bench.sbatch`, `knob-sweep.sbatch` or
-`warm-cache.sbatch`, passes resources on the sbatch command line (never via
-`--export`), and `--self-test` runs the runner's stub test directly.
+The adapter chooses `strata-bench.sbatch`, `knob-sweep.sbatch`,
+`warm-cache.sbatch` or `chain-cache.sbatch`, passes resources on the sbatch
+command line (never via `--export`), and `--self-test` runs the runner's stub
+test directly.
+
+**Checkpoint chain.** `strata/chain` measures prefix growth instead of
+refilling each context from zero. One fixed salt and one conversation slot;
+each stop's prompt is the previous prompt plus appended filler, so turns 2..N
+should reuse the previous checkpoint and prefill only the delta. The probe
+writes one JSONL line per turn (`mode:"chain"`) with `stop`, `prev_stop`,
+`prompt_tokens`, engine `reused_tokens`, `reuse_fraction`, `ttft_s`,
+`prefill_s`, `prefill_delta_tokens`, strict `decode_s`/`tpot_ms`/
+`decode_tok_s_strict`, `decode_tok_s`, `aggregate_tok_s` and `status`. The
+recipe's `probe.stops` is a strictly-increasing comma list; every stop is
+clamped to `max_context - tokens_per_turn - pad_safety`.
+
+```bash
+llm/bench/benchctl plan      --recipe strata-chain-l40
+llm/bench/benchctl run       --recipe strata-chain-l40 --dry-run
+llm/bench/adapters/strata.sh --runner chain --model iq3s \
+  --stops 1024,100000,200000,262144 --tokens-per-turn 512 \
+  --max-context 262144 --node uk-g6-02 --outdir /tmp/chain
+```
 
 ### vLLM (Qwen3.8 Blackwell / Qwen3.5 A100)
 
@@ -184,9 +207,10 @@ llm/bench/benchctl report --experiment 2026-10-25-vast-titanx2 --append
 | `sbatch … llm/strata/strata-bench.sbatch …` | same, via `benchctl run` | `--nice=100` is always added by the adapter |
 | `llm/strata/knob-sweep.sh …` | `benchctl run --recipe strata-knobs` | variant list in `options.variants` |
 | `llm/strata/warm-cache.sh …` | `benchctl run --recipe strata-warm` | probe `--mode warm` unchanged |
+| `llm/strata/chain-cache.sh …` | `benchctl run --recipe strata-chain-l40` | probe `--mode chain --stops … --tokens-per-turn …` |
 | `llm/strata/install-engine.sh` | `benchctl prepare --backend strata --model all` | idempotent; skips when both components exist |
 | `llm/strata/fetch-models.sh --only iq3s` | `benchctl prepare --backend strata --model iq3s` | size check first; `--submit` still available |
-| `python3 llm/strata/strata_probe.py …` | `python3 llm/bench/probe.py …` | byte-identical copy; upstream remains the frozen original |
+| `python3 llm/strata/strata_probe.py …` | `python3 llm/bench/probe.py …` | canonical probe; upstream stays frozen at the pre-chain copy |
 | `llm/qwen38/serve.sh up` | `adapters/vllm.sh --runner serve --flavour qwen38` | resources from `config-bw.json` |
 | `BASE_URL=… llm/qwen38/measure.sh` | `benchctl run --recipe qwen38-bw-fp4 --allow-heavy` | server must already be up |
 | `llm/qwen35/serve.sh up` | `adapters/vllm.sh --runner serve --flavour qwen35-122b` | 35B: `--flavour qwen35-35b` |
@@ -230,10 +254,14 @@ These are deliberate; the adapters do not "fix" the runners.
    `<pack>/<variant>/`. `report` scans depth-first, prefers root-level
    summaries, and skips `attic/`, `_attempts/`, `data/`, `deps/` and
    `engine-logs/`.
-8. **`llm/strata/strata_probe.py` is frozen.** `llm/bench/probe.py` is a
-   byte-identical copy (a test asserts the sha); edit neither in place while a
-   campaign is running. Future changes go into `probe.py` deliberately and the
-   test is updated with the decision.
+8. **`llm/strata/strata_probe.py` is frozen; `llm/bench/probe.py` is
+   canonical.** They were byte-identical until 2026-10-26, when chain mode and
+   strict client timing were added to the bench copy while a V100 campaign was
+   still using the upstream file. The bench probe keeps the upstream cold
+   request shape and every legacy JSONL field; the extra cold cell fields are
+   the additive strict p50/p95 metrics. The byte-copy test was replaced by a
+   "canonical probe has chain + calibration" test; do not silently edit the
+   frozen upstream.
 9. **`strata --version` can block on the login node.** It was observed hanging
    for >20 s with no GPU. `doctor` reads component directory names instead.
 10. **Vast tooling was never in the repo.** The campaign `tools/vast.py` was a
@@ -259,9 +287,9 @@ python3 -m unittest discover -s llm/bench/tests -v
 
 | file | proves |
 |---|---|
-| `test_recipes.py` | all 14 recipes validate; typos, bad cells, unknown backends, GPU index beyond `gres`, cell > window, cloud without offer fail fast; `plan` for every recipe creates no files |
-| `test_adapters_dry_run.py` | every adapter and every recipe has a no-submit `--dry-run`; a fake `sbatch` proves the real strata submit path passes `--nice=100`; the unchanged `bench-matrix.sh --self-test` passes end-to-end through the adapter |
-| `test_probe_stub.py` | `probe.py` is a byte copy of the upstream probe; cold JSONL contract + clamp; warm reuse drops TTFT on `stub_server.py --cache-reuse` |
+| `test_recipes.py` | all 16 recipes validate; typos, bad cells, unknown backends, GPU index beyond `gres`, cell > window, bad chain stops, cloud without offer fail fast; `plan` for every recipe creates no files |
+| `test_adapters_dry_run.py` | every adapter and every recipe has a no-submit `--dry-run`; a fake `sbatch` proves the real strata submit path passes `--nice=100`; both `bench-matrix.sh` and `chain-cache.sh` self-tests pass end-to-end through the adapter |
+| `test_probe_stub.py` | canonical probe has chain+calibration; legacy cold contract + clamp + strict p50/p95; warm reuse drops TTFT; chain prompts are prefix extensions, `reused` grows, delta prefill shrinks, strict decode/TPOT emitted |
 | `test_doctor.py` | doctor JSON is self-consistent (unique ids, valid statuses, a fix for every warn/fail), required checks exist, backend filtering works, `--strict` exits 0 |
 | `test_import.py` | new-dir detection, `--dry-run` does not import, state file updates once, second run is empty |
 | `test_vast.py` | the $53/TB and driver-570 offers are rejected; plan separates GPU/download cost; rent/destroy/stage dry-runs print without network; destroy refuses without `--yes` |
@@ -272,9 +300,12 @@ python3 -m unittest discover -s llm/bench/tests -v
   (`opencode_tasks.py`); no shared quality harness, no BFCL/RepoBench runner.
 - **AMD/ROCm** is not modelled: recipes assume CUDA (sm_70/sm_89/sm_120) and
   the Strata cuda12/cuda13 components.
-- **Multi-run scheduling** is not wrapped: `bin/hpc_chain.sh` can serialize
-  arbitrary job lines, but there is no `benchctl chain` that orders recipes and
-  waits for each result dir.
+- **Checkpoint chain is now expressible** as a first-class runner/mode
+  (`strata-chain-*`, `probe.py --mode chain`), but **multi-recipe scheduling**
+  is still not wrapped: `bin/hpc_chain.sh` can serialize arbitrary job lines,
+  but there is no `benchctl chain` that orders recipes and waits for each
+  result dir. The two chain recipes are separate submissions (L40 measured,
+  4x V100 pending).
 - **`vllm.sh` serve does not wait/verify readiness**; `serve.sh wait` remains a
   separate call. A `run --recipe qwen38-serve` flow would need its own recipe.
 - **Report cannot infer provenance** beyond recipe evidence paths; it does not

@@ -21,6 +21,7 @@ EXPECTED = {
     "strata-l40x1", "strata-l40x2", "strata-v100x1",
     "strata-v100-resident-2x", "strata-v100-resident-4x",
     "strata-knobs", "strata-warm", "strata-sustained-512",
+    "strata-chain-l40", "strata-chain-v100-4x",
     "qwen38-bw-fp4", "qwen35-ampere02",
     "glm53-cache-sweep", "glm53-context-sweep",
     "vast-titan", "vast-3090",
@@ -78,6 +79,16 @@ class RecipeValidationTest(unittest.TestCase):
         raw["cells"] = raw["cells"] + ["131072:1"]
         errors = self.errors(raw)
         self.assertTrue(any("exceeds probe.max_context" in e for e in errors), errors)
+
+    def test_chain_recipe_requires_increasing_stops(self):
+        raw = json.loads((BENCH / "recipes" / "strata-chain-l40.json").read_text())
+        del raw["probe"]["stops"]
+        errors = self.errors(raw)
+        self.assertTrue(any("probe.stops" in e for e in errors), errors)
+        raw = json.loads((BENCH / "recipes" / "strata-chain-l40.json").read_text())
+        raw["probe"]["stops"] = "100000,1024"
+        errors = self.errors(raw)
+        self.assertTrue(any("increasing" in e for e in errors), errors)
 
     def test_cloud_recipe_requires_offer(self):
         raw = json.loads((BENCH / "recipes" / "vast-titan.json").read_text())

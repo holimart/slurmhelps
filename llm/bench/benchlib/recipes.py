@@ -121,14 +121,34 @@ def _semantic_check(raw, errors):
     probe = raw.get("probe") or {}
 
     if backend == "strata":
-        if runner not in ("matrix", "knobs", "warm"):
-            errors.append("$.runner: strata supports matrix|knobs|warm, got %r" % runner)
+        if runner not in ("matrix", "knobs", "warm", "chain"):
+            errors.append("$.runner: strata supports matrix|knobs|warm|chain, got %r" % runner)
         if runner in ("matrix", "warm") and not raw.get("cells"):
             errors.append("$.cells: required for a strata %s recipe" % runner)
         if runner == "knobs" and not options.get("contexts"):
             errors.append("$.options.contexts: required for a strata knobs recipe")
-        if runner in ("knobs", "warm") and not probe.get("max_context"):
+        if runner in ("knobs", "warm", "chain") and not probe.get("max_context"):
             errors.append("$.probe.max_context: required for a strata %s recipe" % runner)
+        if runner == "chain":
+            if not probe.get("stops"):
+                errors.append("$.probe.stops: required for a strata chain recipe")
+            if not probe.get("tokens_per_turn"):
+                errors.append("$.probe.tokens_per_turn: required for a strata chain recipe")
+            stops = []
+            for item in str(probe.get("stops") or "").split(","):
+                try:
+                    stops.append(int(item))
+                except ValueError:
+                    errors.append("$.probe.stops: %r is not an integer" % item)
+            if stops != sorted(stops) or len(stops) != len(set(stops)):
+                errors.append("$.probe.stops: must be strictly increasing")
+            else:
+                max_ctx = probe.get("max_context")
+                if max_ctx and stops and stops[-1] > max_ctx:
+                    errors.append("$.probe.stops: last stop %d exceeds "
+                                  "probe.max_context=%d" % (stops[-1], max_ctx))
+            if int(probe.get("tokens_per_turn") or 0) >= int(probe.get("max_context") or 0):
+                errors.append("$.probe.tokens_per_turn: must be smaller than max_context")
         if not hw.get("gres"):
             errors.append("$.hardware.gres: required for strata (e.g. 'gpu:1')")
         if hw.get("gpus") and hw.get("gres"):

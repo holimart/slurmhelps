@@ -70,6 +70,11 @@ class AdapterDryRunTest(unittest.TestCase):
               "--cells", "1024:1", "--warm-repeats", "3",
               "--max-context", "131072", "--outdir", "/tmp/x"],
              "warm-cache.sbatch"),
+            (["strata.sh", "--dry-run", "--runner", "chain", "--model", "iq3s",
+              "--stops", "1024,100000,200000,262144",
+              "--tokens-per-turn", "512", "--chain-last-repeats", "1",
+              "--max-context", "262144", "--outdir", "/tmp/x"],
+             "chain-cache.sbatch"),
             (["vllm.sh", "--dry-run", "--runner", "measure", "--flavour", "qwen38",
               "--outdir", "/tmp/x"], "measure.sh"),
             (["vllm.sh", "--dry-run", "--runner", "measure",
@@ -204,6 +209,28 @@ class AdapterDryRunTest(unittest.TestCase):
             rows = [json.loads(line) for line in cells.read_text().splitlines() if line]
             self.assertEqual(len(rows), 4)
             self.assertTrue(all(row["error"] is None for row in rows))
+
+    def test_strata_chain_self_test_through_the_adapter(self):
+        """Orchestrator -> adapter -> chain-cache.sh --self-test (stub only)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            env = _env(tmp)
+            env["SELFTEST_DIR"] = str(tmp / "chain-selftest")
+            proc = subprocess.run([
+                str(ADAPTERS / "strata.sh"), "--runner", "chain",
+                "--model", "iq3s", "--self-test"],
+                env=env, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, timeout=600)
+            self.assertEqual(proc.returncode, 0, proc.stdout[-4000:])
+            self.assertIn("SELF-TEST PASS", proc.stdout)
+            self.assertIn("prefix growth", proc.stdout)
+            found = list(tmp.rglob("cells.jsonl"))
+            self.assertTrue(found, "chain self-test wrote no cells.jsonl")
+            rows = [json.loads(line) for line in found[0].read_text().splitlines() if line]
+            self.assertEqual(len(rows), 4)
+            self.assertTrue(all(row["mode"] == "chain" for row in rows))
+            self.assertTrue(all(row["status"] == "ok" for row in rows))
+            self.assertGreater(rows[-1]["reused_tokens"], rows[0]["reused_tokens"])
 
 
 if __name__ == "__main__":

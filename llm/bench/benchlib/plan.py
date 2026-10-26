@@ -126,13 +126,19 @@ def render_text(plan):
     lines.append("model       %s — %s" % (plan["model"], plan["model_info"]))
     lines.append("hardware    %s" % plan["hardware_summary"])
     lines.append("mode        %s" % plan["mode"])
-    lines.append("cells       %d: %s" % (plan["cell_count"], _fmt_cells(plan)))
+    if plan["runner"] == "chain":
+        lines.append("stops       %s (one conversation; %s tokens/turn)" % (
+            plan["probe"].get("stops", "?"),
+            plan["probe"].get("tokens_per_turn", "?")))
+    else:
+        lines.append("cells       %d: %s" % (plan["cell_count"], _fmt_cells(plan)))
     if plan["warm_cells"]:
         lines.append("warm cells  %s" % ", ".join(plan["warm_cells"]))
     probe = plan["probe"]
     probe_bits = []
     for key in ("max_context", "max_tokens", "requests_per_slot", "pad_safety",
-                "warm_repeats", "temperature", "timeout_s"):
+                "warm_repeats", "stops", "tokens_per_turn", "chain_last_repeats",
+                "temperature", "timeout_s"):
         if key in probe:
             probe_bits.append("%s=%s" % (key, probe[key]))
     lines.append("probe       %s" % (" ".join(probe_bits) or "backend defaults"))

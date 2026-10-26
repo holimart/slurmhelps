@@ -52,7 +52,10 @@ def _strata_args(recipe, cfg, outdir):
             "--outdir", str(outdir)]
     _add(argv, "--gpus", hw.get("gpus"))
     _add(argv, "--budget-min", recipe.budget_min)
-    _add(argv, "--max-tokens", probe.get("max_tokens"))
+    if recipe.runner != "chain":
+        # Chain generation length is --tokens-per-turn; the runner has no
+        # --max-tokens knob.
+        _add(argv, "--max-tokens", probe.get("max_tokens"))
 
     if recipe.runner in ("matrix", "warm"):
         _add(argv, "--cells", ",".join(recipe.raw.get("cells") or []))
@@ -70,6 +73,12 @@ def _strata_args(recipe, cfg, outdir):
     if recipe.runner == "warm":
         _add(argv, "--node", hw.get("nodelist") or hw.get("node"))
         _add(argv, "--warm-repeats", probe.get("warm_repeats"))
+        _add(argv, "--max-context", probe.get("max_context"))
+    if recipe.runner == "chain":
+        _add(argv, "--node", hw.get("nodelist") or hw.get("node"))
+        _add(argv, "--stops", probe.get("stops"))
+        _add(argv, "--tokens-per-turn", probe.get("tokens_per_turn"))
+        _add(argv, "--chain-last-repeats", probe.get("chain_last_repeats"))
         _add(argv, "--max-context", probe.get("max_context"))
     if opts.get("self_test"):
         argv.append("--self-test")

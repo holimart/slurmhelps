@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "name": "strata-chain-v100-4x",
+  "description": "PENDING / NOT RUN: checkpoint chain on four V100-32G cards (IQ3_S fully resident), 1k -> 100k -> 200k -> 262144, 512 tokens per turn.",
+  "backend": "strata",
+  "runner": "chain",
+  "model": "iq3s",
+  "experiment": "2026-10-26-chain",
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:4",
+    "cpus": 32,
+    "mem": "340G",
+    "time": "01:00:00",
+    "gpus": "0,1,2,3",
+    "gpu_type": "4x V100-SXM2-32GB"
+  },
+  "mode": "chain",
+  "probe": {
+    "max_context": 262144,
+    "max_tokens": 512,
+    "tokens_per_turn": 512,
+    "stops": "1024,100000,200000,262144",
+    "pad_safety": 128,
+    "chain_last_repeats": 1
+  },
+  "budget_min": 60,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 45,
+    "basis": "not measured; one 4x V100 allocation plus staging/load; the chain itself is four prefills and 4 x 512-token decode"
+  },
+  "caveats": [
+    "PENDING / NOT RUN. This definition exists so the 4x V100 checkpoint chain can be submitted later with benchctl; it has no evidence directory yet.",
+    "One allocation must own all four cards; IQ3_S must be fully resident (verify the engine log, do not assume).",
+    "Four V100 cards are layer-split, not tensor-parallel; the conversation-cache budget and checkpoint granularity may differ from the L40 run.",
+    "The chain is C1 and sequential; it does not exercise the multi-slot resident scheduler.",
+    "Each stop is clamped to 262144 - 512 - 128 = 261504 prompt tokens.",
+    "Check `squeue -u holecem` first: the V100 campaign may own volta05."
+  ]
+}

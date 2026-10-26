@@ -6,9 +6,10 @@
 # through --export, which splits comma lists) and prints the exact command for
 # --dry-run.
 #
-# usage: strata.sh [--dry-run] --runner matrix|knobs|warm --model iq3s|coder|q2_0
+# usage: strata.sh [--dry-run] --runner matrix|knobs|warm|chain --model iq3s|coder|q2_0
 #                  [--cells ctx:C,...] [--warm-cells ...] [--warm-repeats N]
 #                  [--contexts LIST] [--batches LIST] [--variants LIST]
+#                  [--stops LIST] [--tokens-per-turn N] [--chain-last-repeats N]
 #                  [--max-context N] [--max-tokens N] [--requests-per-slot N]
 #                  [--gpus 0,1] [--node NAME] [--outdir DIR] [--budget-min N]
 #                  [--partition P] [--nodelist NODE] [--gres gpu:N]
@@ -31,6 +32,9 @@ WARM_REPEATS=""
 CONTEXTS=""
 BATCHES=""
 VARIANTS=""
+STOPS=""
+TOKENS_PER_TURN=""
+CHAIN_LAST_REPEATS=""
 MAX_CONTEXT=""
 MAX_TOKENS=""
 RPS=""
@@ -51,7 +55,7 @@ DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1; shift ;;
-    --runner) RUNNER=${2:?--runner needs matrix|knobs|warm}; shift 2 ;;
+    --runner) RUNNER=${2:?--runner needs matrix|knobs|warm|chain}; shift 2 ;;
     --model) MODEL=${2:?--model needs a pack}; shift 2 ;;
     --cells) CELLS=${2:?}; shift 2 ;;
     --warm-cells) WARM_CELLS=${2:?}; shift 2 ;;
@@ -59,6 +63,9 @@ while [ $# -gt 0 ]; do
     --contexts) CONTEXTS=${2:?}; shift 2 ;;
     --batches) BATCHES=${2:?}; shift 2 ;;
     --variants) VARIANTS=${2:?}; shift 2 ;;
+    --stops) STOPS=${2:?--stops needs e.g. 1024,100000,200000,262144}; shift 2 ;;
+    --tokens-per-turn) TOKENS_PER_TURN=${2:?}; shift 2 ;;
+    --chain-last-repeats) CHAIN_LAST_REPEATS=${2:?}; shift 2 ;;
     --max-context) MAX_CONTEXT=${2:?}; shift 2 ;;
     --max-tokens) MAX_TOKENS=${2:?}; shift 2 ;;
     --requests-per-slot) RPS=${2:?}; shift 2 ;;
@@ -114,7 +121,17 @@ case "$RUNNER" in
     [ -n "$MAX_TOKENS" ] && runner_args+=(--max-tokens "$MAX_TOKENS")
     [ -n "$NODE" ] && runner_args+=(--node "$NODE")
     ;;
-  *) echo "strata.sh: --runner must be matrix|knobs|warm" >&2; exit 2 ;;
+  chain)
+    SBATCH=$HELPER/chain-cache.sbatch
+    RUNNER_SH=$HELPER/chain-cache.sh
+    runner_args+=(--model "$MODEL")
+    [ -n "$STOPS" ] && runner_args+=(--stops "$STOPS")
+    [ -n "$TOKENS_PER_TURN" ] && runner_args+=(--tokens-per-turn "$TOKENS_PER_TURN")
+    [ -n "$CHAIN_LAST_REPEATS" ] && runner_args+=(--chain-last-repeats "$CHAIN_LAST_REPEATS")
+    [ -n "$MAX_CONTEXT" ] && runner_args+=(--max-context "$MAX_CONTEXT")
+    [ -n "$NODE" ] && runner_args+=(--node "$NODE")
+    ;;
+  *) echo "strata.sh: --runner must be matrix|knobs|warm|chain" >&2; exit 2 ;;
 esac
 
 [ -n "$GPUS" ] && runner_args+=(--gpus "$GPUS")
