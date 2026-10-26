@@ -299,9 +299,9 @@ sbatch --nice=100 --nodelist=uk-g6-02 llm/strata/chain-cache.sbatch \
 ```
 
 Measured 2026-10-26 (IQ3_S + Coder, 1× L40S): checkpoint reuse engaged at
-**8,192-token granularity** — the 200k and 262k turns reused 98,304 and
-196,608 tokens (the previous prompt's last complete block), while the 100k
-turn reused 0 because the 1k seed is smaller than one block. An exact repeat at
+**16,384-token granularity** — the 200k and 262k turns reused 98,304
+(= 6 × 16,384) and 196,608 (= 12 × 16,384) tokens, while the 100k turn
+reused 0 because the 1k seed is smaller than one checkpoint block. An exact repeat at
 261k reused 261,050 = prompt−5 in 0.415 s. TTFT fell from cold 48.6 s → 25.9 s
 at 200k and 63.8 s → 17.7 s at 261k; strict decode stayed 116–129 tok/s
 (TPOT 7.7–8.7 ms). Details, cold comparison and caveats:
