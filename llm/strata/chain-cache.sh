@@ -473,7 +473,7 @@ append_chain_summary() { # cells_jsonl line_offset csv model
   python3 - "$1" "$2" "$3" "$4" <<'PY'
 import csv, json, os, sys
 cells, offset, csv_path, model = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
-header = ["model", "stop", "prev_stop", "prompt_tokens", "reused_tokens",
+header = ["model", "turn", "repeat", "stop", "prev_stop", "prompt_tokens", "reused_tokens",
           "reuse_fraction", "ttft_s", "prefill_s", "prefill_delta_tokens",
           "decode_s", "tpot_ms", "decode_tok_s_strict", "decode_tok_s",
           "aggregate_tok_s", "completion_tokens", "timing_source",
@@ -518,7 +518,7 @@ write_failed_rows() { # status error
   python3 - "$dest" "$CUR_MODEL" "$STOPS" "$status" "$err" <<'PY'
 import csv, os, sys
 path, model, stops, status, err = sys.argv[1:6]
-header = ["model", "stop", "prev_stop", "prompt_tokens", "reused_tokens",
+header = ["model", "turn", "repeat", "stop", "prev_stop", "prompt_tokens", "reused_tokens",
           "reuse_fraction", "ttft_s", "prefill_s", "prefill_delta_tokens",
           "decode_s", "tpot_ms", "decode_tok_s_strict", "decode_tok_s",
           "aggregate_tok_s", "completion_tokens", "timing_source",
@@ -528,9 +528,9 @@ with open(path, "a", newline="") as fh:
     writer = csv.DictWriter(fh, fieldnames=header, extrasaction="ignore")
     if not exists:
         writer.writeheader()
-    for stop in [s for s in stops.split(",") if s.strip()]:
-        writer.writerow({"model": model, "stop": stop, "status": status,
-                         "error": err})
+    for turn, stop in enumerate([s for s in stops.split(",") if s.strip()], 1):
+        writer.writerow({"model": model, "turn": turn, "repeat": 1,
+                         "stop": stop, "status": status, "error": err})
 PY
 }
 
