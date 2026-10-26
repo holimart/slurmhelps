@@ -260,16 +260,17 @@ VRAM 0.0 (0.0%), PCIe 0.0 (0.0%), CPU 0.0 (0.0%)` and per-request
 `hit_rate: null` on this path — that is a bookkeeping artefact of the split,
 not a 0 % cache. The authoritative lines are `100% of the experts resident`
 and `N of N profiled pairs`, and there are no `expert cache miss`, `PCIe`
-(non-probe) or CPU-expert lines anywhere in the three logs. **No engine in
-this campaign streamed experts.**
+(non-probe) or CPU-expert lines anywhere in the three **resident** logs.
+**No resident engine in this campaign streamed experts.**
 
 KV is a separate axis: with `--kv-resident 32768` the K/V of the resident
 configs hit VRAM on 73–99 % of block reads (0.2–25 MiB read from pinned RAM
 per sample); that is the intended streaming KV mode, not expert paging. The
 engine prints “32768 of <window> cells per QSA layer in VRAM, the K/V in
-0.77 GiB of pinned RAM” at both the 131k and 262k windows, i.e. the same
-0.77 GiB resident share is kept while the window grows; the rest is read from
-pinned host memory as the 73–99 % hit rates show.
+0.77 GiB of pinned RAM” at both the 131k and 262k windows — the printed
+figure stays fixed while the window doubles, so only the streamed share
+grows; the rest is read from pinned host memory as the 73–99 % hit rates
+show.
 
 ## D. Warm vs cold at the maximum contexts (4× resident IQ3_S)
 
