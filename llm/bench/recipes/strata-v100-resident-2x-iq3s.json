@@ -6,7 +6,9 @@
   "runner": "matrix",
   "model": "iq3s",
   "experiment": "2026-10-27-v100-extras",
-  "evidence": [],
+  "evidence": [
+    "strata-runs/2026-10-27-v100-extras/h4-2x-iq3s"
+  ],
   "hardware": {
     "kind": "cluster",
     "partition": "ffa-gpulab",
@@ -20,11 +22,16 @@
   },
   "mode": "cold",
   "cells": [
-    "1024:1", "1024:2",
-    "4096:1", "4096:2",
-    "16384:1", "16384:2",
-    "65536:1", "65536:2",
-    "131072:1", "131072:2"
+    "1024:1",
+    "1024:2",
+    "4096:1",
+    "4096:2",
+    "16384:1",
+    "16384:2",
+    "65536:1",
+    "65536:2",
+    "131072:1",
+    "131072:2"
   ],
   "probe": {
     "max_context": 131072,
@@ -33,7 +40,10 @@
     "pad_safety": 128
   },
   "budget_min": 45,
-  "output": {"root": "strata_runs", "subdir": "2026-10-27-v100-extras/h4-2x-iq3s"},
+  "output": {
+    "root": "strata_runs",
+    "subdir": "2026-10-27-v100-extras/h4-2x-iq3s"
+  },
   "estimate": {
     "wall_minutes": 25,
     "basis": "two-card load plus ten cells; prefill at 128k dominates (about 3 x 50 s)"
