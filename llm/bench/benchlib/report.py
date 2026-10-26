@@ -15,9 +15,12 @@ from . import config as config_mod
 from . import recipes as recipes_mod
 from . import util
 
-PREFERRED_SUMMARY = ["ctx", "context", "concurrency", "variant", "pack", "mode",
-                     "repeat", "decode_tok_s_p50", "decode_p50", "aggregate_tok_s",
-                     "aggregate", "ttft_s_p50", "ttft_p50", "ttft_s_p95",
+PREFERRED_SUMMARY = ["ctx", "context", "turn", "stop", "prev_stop", "concurrency",
+                     "variant", "pack", "mode", "repeat", "reused_tokens",
+                     "reuse_fraction", "prefill_delta_tokens",
+                     "decode_tok_s_p50", "decode_p50", "decode_tok_s_strict",
+                     "tpot_ms", "aggregate_tok_s", "aggregate", "ttft_s",
+                     "prefill_s", "ttft_s_p50", "ttft_p50", "ttft_s_p95",
                      "ttft_p95", "prompt_tokens", "status", "error"]
 SKIP_DIRS = {"attic", "data", "deps", "engine-logs", "procs", "tokenizer",
              "packs", "mtp", "__pycache__", ".cache", "_attempts"}
