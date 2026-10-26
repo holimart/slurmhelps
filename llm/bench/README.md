@@ -53,7 +53,7 @@ submit      sbatch --nice=100 ... llm/strata/strata-bench.sbatch --model iq3s ..
 
 | command | what it does |
 |---|---|
-| `doctor [--backend all\|strata\|vllm\|glm53\|cloud] [--offline] [--deep-sha] [--strict]` | driver/CUDA visibility, GLIBCXX floor, engine + pack presence, node/partition state, disk/RAM, Vast credit and offer filters, and the known footguns. `--offline` skips the Vast API. Missing optional backends are warnings, not failures. |
+| `doctor [--backend all\|strata\|vllm\|glm53\|cloud] [--offline] [--deep-sha] [--strict]` | driver/CUDA visibility, GLIBCXX floor, engine + pack presence, node/partition state, disk/RAM, Vast credit and a live offer per cloud recipe (hourly price + `internet_down_cost_per_tb`), and the known footguns. `--offline` skips the Vast API. Missing optional backends are warnings, not failures. |
 | `plan --recipe NAME\|FILE` | validate + print backend, model, hardware, cells, window, probe options, outdir, declared wall/cost, and the exact adapter/sbatch command. No side effects. |
 | `prepare --backend strata\|vllm\|glm53 --model PACK` | delegates to `install-engine.sh`, `fetch-models.sh`, `pull-container.sh`, `hf download`, `glm53 install.sh`. Heavy image builds/compiled installs are held on the login node unless `--allow-heavy`. `--dry-run` prints. |
 | `run --recipe NAME\|FILE [--dry-run]` | submit the job(s) with `--nice=100` (strata) or run the documented flow. A Vast recipe without `--yes` only plans. Client benchmarks (`measure`/`context`/`cache`) refuse the login node unless `--allow-heavy`. |

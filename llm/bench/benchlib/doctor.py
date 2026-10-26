@@ -405,6 +405,44 @@ class Doctor:
                  "reliability >= %.2f" % (min_driver, max_down,
                                           float(self.cfg.vast.get("min_reliability", 0.97))),
                  group="cloud")
+        if self.offline:
+            self.add("cloud.offers", "skip", "--offline: offer search not queried", group="cloud")
+            return
+        # One live offer search per cloud recipe: this is where the per-offer
+        # bandwidth number is visible, and it is read-only.
+        for name in recipes_mod.recipe_names():
+            if not name.startswith("vast-"):
+                continue
+            try:
+                rec = recipes_mod.load_recipe(name)
+            except recipes_mod.RecipeError:
+                continue
+            proc = util.run([__import__("sys").executable, str(vast_py), "--json",
+                             "offers", "--recipe-file", str(rec.path), "--limit", "1"],
+                            timeout=20)
+            if proc["rc"] != 0:
+                self.add("cloud.offers.%s" % name, "warn",
+                         "offer search failed: %s" % util.tail(proc["err"], 2),
+                         "check network/API; --offline skips this", group="cloud")
+                continue
+            try:
+                data = json.loads(proc["out"])
+            except ValueError:
+                self.add("cloud.offers.%s" % name, "warn", "unparseable offers JSON",
+                         group="cloud")
+                continue
+            if not data.get("eligible"):
+                self.add("cloud.offers.%s" % name, "warn",
+                         "no eligible offer right now (%d rejected)" % data.get("rejected", 0),
+                         "wait, loosen max_dph, or top up credit", group="cloud")
+                continue
+            best = data["eligible"][0]
+            self.add("cloud.offers.%s" % name, "ok",
+                     "offer %s: %dx %s, $%.4f/h, driver %s, download $%.2f/TB (%s)"
+                     % (best["id"], best["num_gpus"], best["gpu_name"],
+                        best["dph_total"], best["driver_version"],
+                        best["internet_down_cost_per_tb"], best["geolocation"]),
+                     group="cloud")
 
     # ---- footguns ----------------------------------------------------
     def check_footguns(self):
