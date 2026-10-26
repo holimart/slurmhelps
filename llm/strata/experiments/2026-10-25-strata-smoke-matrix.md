@@ -898,3 +898,17 @@ sbatch --nice=100 --nodelist=uk-g6-07 --time=04:00:00 \
   llm/strata/knob-sweep.sbatch --model iq3s --node uk-g6-07 --gpus 0 \
   --contexts 1024,4096,16384 --batches 1,4 --variants all --budget-min 150
 ```
+
+## 2026-10-26 — follow-up: V100 residency, max context, Volta kernels
+
+The 1× V100 rows above are the baseline for the next campaign, which was run
+on the same node family and is written up separately:
+
+**[`2026-10-26-v100-residency-kernels.md`](2026-10-26-v100-residency-kernels.md)**
+
+It adds 2× V100-32G (Coder IQ1_M, Q2_0) and 4× V100-32G (IQ3_S) fully
+resident configurations, 128k on 2× and **256k on 4×**, warm-cache TTFT at
+64k/128k/256k (69 s → 3.1 s at 256k), and a 13-variant Volta kernel/flag
+sweep. Nothing from this document was re-run. The 65k V100 cells marked fail
+above were the old probe's window overshoot; with the calibrated probe the
+same node serves 65k and 131k normally.
