@@ -12,6 +12,7 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import doctor as doctor_mod
+from . import recipes as recipes_mod
 from . import util
 
 HEAVY_ON_LOGIN = {"vllm.pull", "glm53.install", "cloud.setup"}
@@ -113,7 +114,7 @@ def _glm_steps(cfg, model, force, engine, variant):
 
 
 def build(cfg, backend, model, force=False, submit=False, engine=None, variant=None,
-          allow_heavy=False):
+          allow_heavy=False, recipe=None, instance=None, ssh=None):
     if backend == "strata":
         steps = _strata_steps(cfg, model, force, submit)
     elif backend == "vllm":
@@ -125,9 +126,17 @@ def build(cfg, backend, model, force=False, submit=False, engine=None, variant=N
         steps = _glm_steps(cfg, model, force, e, v)
     elif backend == "cloud":
         vast_py = str(config_mod.REPO_ROOT / "llm" / "cloud" / "vast" / "vast.py")
-        steps = [_step("cloud.stage", [sys.executable, vast_py, "stage",
-                                       "--recipe-file", model],
-                       heavy=True,
+        if not recipe:
+            raise ValueError("cloud prepare needs --recipe (e.g. vast-titan) so the "
+                             "right setup script and pack list are staged")
+        rec = recipes_mod.load_recipe(recipe)
+        argv = [sys.executable, vast_py, "stage", "--recipe-file", str(rec.path),
+                "--yes"]
+        if instance:
+            argv.extend(["--instance", str(instance)])
+        if ssh:
+            argv.extend(["--ssh", ssh])
+        steps = [_step("cloud.stage", argv, heavy=True,
                        note="upload llm/cloud/vast/{setup,install-engine,strata_probe}.sh "
                             "and run setup on the rented instance")]
     else:

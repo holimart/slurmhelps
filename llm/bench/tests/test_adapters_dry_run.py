@@ -152,6 +152,37 @@ class AdapterDryRunTest(unittest.TestCase):
             self.assertIn("login node", proc.stderr)
             self.assertFalse((tmp / "sbatch.log").exists())
 
+    def test_prepare_cloud_dry_run_stages_the_recipe_scripts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            _fake_bin(tmp)
+            proc = self._run([
+                str(BENCH / "benchctl"), "prepare", "--backend", "cloud",
+                "--model", "iq3s", "--recipe", "vast-titan",
+                "--instance", "123", "--dry-run", "--json"], tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            data = json.loads(proc.stdout)
+            step = data["steps"][0]
+            self.assertEqual(step["id"], "cloud.stage")
+            self.assertEqual(step["status"], "blocked")
+            self.assertIn("vast.py stage", step["command"])
+            self.assertIn("vast-titan.json", step["command"])
+            self.assertIn("--instance 123", step["command"])
+
+    def test_strata_prepare_dry_run_is_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            _fake_bin(tmp)
+            proc = self._run([
+                str(BENCH / "benchctl"), "prepare", "--backend", "strata",
+                "--model", "iq3s", "--dry-run", "--json"], tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            data = json.loads(proc.stdout)
+            ids = [step["id"] for step in data["steps"]]
+            self.assertIn("strata.install-engine", ids)
+            self.assertIn("strata.fetch.iq3s", ids)
+            self.assertFalse((tmp / "sbatch.log").exists())
+
     def test_strata_matrix_self_test_through_the_adapter(self):
         """Orchestrator -> adapter -> unchanged bench-matrix.sh --self-test."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -65,7 +65,9 @@ def cmd_prepare(args):
     try:
         steps = prepare_mod.build(cfg, args.backend, args.model, force=args.force,
                                   submit=args.submit, engine=args.engine,
-                                  variant=args.variant, allow_heavy=args.allow_heavy)
+                                  variant=args.variant, allow_heavy=args.allow_heavy,
+                                  recipe=args.recipe, instance=args.instance,
+                                  ssh=args.ssh)
     except ValueError as exc:
         print("benchctl prepare: %s" % exc, file=sys.stderr)
         return 2
@@ -104,7 +106,9 @@ def cmd_prepare(args):
             print("")
             for record in results:
                 print("[%s] %s" % (record["status"], record["id"]))
-    return 0 if all(r["status"] in ("ok", "skipped", "dry-run") for r in results) else 1
+    if args.dry_run:
+        return 0 if all(r["status"] != "failed" for r in results) else 1
+    return 0 if all(r["status"] in ("ok", "skipped") for r in results) else 1
 
 
 def cmd_run(args):
@@ -303,6 +307,9 @@ def build_parser():
     sp.add_argument("--variant", choices=["nvfp4", "fp8", "q4_k_s", "q4_k_m", "iq4_xs", "iq3_m"])
     sp.add_argument("--allow-heavy", action="store_true",
                     help="allow image builds/compiled installs on the login node")
+    sp.add_argument("--recipe", help="cloud: recipe whose setup script/packs to stage")
+    sp.add_argument("--instance", help="cloud: Vast instance id")
+    sp.add_argument("--ssh", help="cloud: root@host:port when no instance lookup is wanted")
     sp.add_argument("--dry-run", action="store_true")
     sp.set_defaults(func=cmd_prepare)
 
