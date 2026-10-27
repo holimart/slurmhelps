@@ -2,7 +2,8 @@
 # Run a model backend behind the slurmhelps gateway on the compute node.
 #
 #   serve_with_gateway.sh --config CFG --port PORT --upstream-port UPORT \
-#       [--bad-words-file FILE] -- BACKEND_CMD...
+#       [--bad-words-file FILE] [--rewrite-rules FILE] [--rewrite-log FILE] \
+#       -- BACKEND_CMD...
 #
 # The backend must listen on 127.0.0.1:UPORT. The gateway is started on
 # 0.0.0.0:PORT only after the backend's /health answers, so the worker's
@@ -11,13 +12,15 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-CONFIG="" PORT="" UPORT="" BAD_WORDS=""
+CONFIG="" PORT="" UPORT="" BAD_WORDS="" REWRITE_RULES="" REWRITE_LOG=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --config) CONFIG=$2; shift 2 ;;
     --port) PORT=$2; shift 2 ;;
     --upstream-port) UPORT=$2; shift 2 ;;
     --bad-words-file) BAD_WORDS=$2; shift 2 ;;
+    --rewrite-rules) REWRITE_RULES=$2; shift 2 ;;
+    --rewrite-log) REWRITE_LOG=$2; shift 2 ;;
     --) shift; break ;;
     *) echo "serve_with_gateway: unknown option $1" >&2; exit 2 ;;
   esac
@@ -51,8 +54,10 @@ GW_ARGS=(--upstream "http://127.0.0.1:$UPORT/v1" --listen-host 0.0.0.0 --listen-
   # No bearer auth on the node: same as the bare vLLM it replaces.
   --key-env SLURMHELPS_GATEWAY_NO_KEY)
 [ -n "$BAD_WORDS" ] && GW_ARGS+=(--bad-words-file "$BAD_WORDS")
-printf '[serve-with-gateway] backend=127.0.0.1:%s gateway=0.0.0.0:%s bad_words=%s\n' \
-  "$UPORT" "$PORT" "${BAD_WORDS:-none}"
+[ -n "$REWRITE_RULES" ] && GW_ARGS+=(--rewrite-rules "$REWRITE_RULES")
+[ -n "$REWRITE_LOG" ] && GW_ARGS+=(--rewrite-log "$REWRITE_LOG")
+printf '[serve-with-gateway] backend=127.0.0.1:%s gateway=0.0.0.0:%s bad_words=%s rewrite=%s log=%s\n' \
+  "$UPORT" "$PORT" "${BAD_WORDS:-none}" "${REWRITE_RULES:-none}" "${REWRITE_LOG:-none}"
 "$HERE/slurmhelps-serve" --config "$CONFIG" gateway "${GW_ARGS[@]}" &
 GATEWAY=$!
 

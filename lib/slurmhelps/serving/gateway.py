@@ -17,7 +17,11 @@ Everything else, including ``GET /metrics``, is proxied.
 Banned words: when ``bad_words`` is set, every JSON ``POST`` to a
 ``/completions`` or ``/chat/completions`` path gets those strings merged into
 its vLLM ``bad_words`` sampling field, so the model cannot emit them whatever
-the client sends. Used for Qwen3.8's memorised Alibaba OSS proxy URL. If a key is
+the client sends. Used for Qwen3.8's memorised Alibaba OSS proxy URL.
+
+Rewriting: when a ``rewriter`` (``rewrite.Rewriter``) is set, completion
+requests have their history scrubbed and their responses (JSON or SSE)
+rewritten, so denied strings neither reach the model nor the client. If a key is
 configured (``api_key`` or the environment variable named by ``key_env``), a
 valid ``Authorization: Bearer <key>`` is required; the header is never logged.
 """
@@ -34,6 +38,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlsplit
+
+from .rewrite import Rewriter
 
 HOP_BY_HOP = frozenset(
     {
@@ -70,6 +76,7 @@ class GatewayServer:
         timeout: float = 600.0,
         name: str = "slurmhelps-gateway",
         bad_words: list[str] | None = None,
+        rewriter: Rewriter | None = None,
     ) -> None:
         base = upstream or upstream_base or upstream_url
         if not base:
@@ -100,6 +107,7 @@ class GatewayServer:
         self.max_active = int(limit) if limit is not None else None
 
         self.bad_words = _clean_words(bad_words)
+        self.rewriter = rewriter
         self._injected = 0
 
         self._lock = threading.Lock()
@@ -206,6 +214,7 @@ class GatewayServer:
                 "coalesce_ms": self.coalesce_ms,
                 "bad_words": len(self.bad_words),
                 "bad_words_injected": self._injected,
+                "rewrites": dict(self.rewriter.counts) if self.rewriter else None,
             }
 
     # -- proxy helpers -----------------------------------------------------
@@ -221,16 +230,17 @@ class GatewayServer:
             target += "?" + split.query
         return target
 
-    def inject_bad_words(self, method: str, raw_path: str, body: bytes) -> bytes:
-        """Merge the banned words into a completion request body.
+    @staticmethod
+    def is_completion(method: str, raw_path: str) -> bool:
+        return method == "POST" and urlsplit(raw_path).path.rstrip("/").endswith("/completions")
+
+    def prepare_body(self, method: str, raw_path: str, body: bytes, request_id: str = "") -> bytes:
+        """Merge banned words into, and scrub the history of, a completion request.
 
         Bodies that are not a JSON object are passed through unchanged; the
         upstream rejects them anyway.
         """
-        if not self.bad_words or method != "POST" or not body:
-            return body
-        path = urlsplit(raw_path).path.rstrip("/")
-        if not path.endswith("/completions"):
+        if not (self.bad_words or self.rewriter) or not body or not self.is_completion(method, raw_path):
             return body
         try:
             payload = json.loads(body)
@@ -238,13 +248,20 @@ class GatewayServer:
             return body
         if not isinstance(payload, dict):
             return body
-        existing = payload.get("bad_words")
-        merged = _clean_words(existing if isinstance(existing, list) else [])
-        merged += [word for word in self.bad_words if word not in merged]
-        payload["bad_words"] = merged
-        with self._lock:
-            self._injected += 1
+        if self.bad_words:
+            existing = payload.get("bad_words")
+            merged = _clean_words(existing if isinstance(existing, list) else [])
+            merged += [word for word in self.bad_words if word not in merged]
+            payload["bad_words"] = merged
+            with self._lock:
+                self._injected += 1
+        if self.rewriter:
+            self.rewriter.scrub_request(payload, request_id)
         return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+    def inject_bad_words(self, method: str, raw_path: str, body: bytes) -> bytes:
+        """Back-compat alias used by older callers and tests."""
+        return self.prepare_body(method, raw_path, body)
 
     def authorized(self, authorization: str | None) -> bool:
         if not self.api_key:
@@ -369,7 +386,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            body = gateway.inject_bad_words(self.command, self.path, self._read_body())
+            body = gateway.prepare_body(self.command, self.path, self._read_body(), request_id)
             if gateway.coalesce_ms:
                 # Optional, deliberately small batching window.  Default is 0:
                 # a multi-second wait is terrible for a single interactive
@@ -404,7 +421,10 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         try:
             conn.request(self.command, target, body=body or None, headers=headers)
             upstream = conn.getresponse()
-            self._relay_response(upstream, request_id, body_allowed=self.command != "HEAD")
+            if gateway.rewriter and gateway.is_completion(self.command, self.path):
+                self._relay_rewritten(upstream, request_id, gateway.rewriter)
+            else:
+                self._relay_response(upstream, request_id, body_allowed=self.command != "HEAD")
         except (OSError, http.client.HTTPException) as exc:
             gateway.mark_failed()
             if not self._headers_sent:
@@ -470,6 +490,101 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 break
             self.wfile.write(chunk)
             self.wfile.flush()
+
+    def _relay_rewritten(
+        self,
+        upstream: http.client.HTTPResponse,
+        request_id: str,
+        rewriter: Rewriter,
+    ) -> None:
+        ctype = (upstream.getheader("Content-Type") or "").lower()
+        if "text/event-stream" in ctype:
+            self._relay_sse(upstream, request_id, rewriter)
+            return
+        raw = upstream.read()
+        if "json" in ctype:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            if isinstance(payload, dict):
+                raw = json.dumps(rewriter.rewrite_response(payload, request_id),
+                                 separators=(",", ":")).encode("utf-8")
+        self.send_response(upstream.status)
+        for key, value in upstream.getheaders():
+            lower = key.lower()
+            if lower in HOP_BY_HOP or lower in ("content-length", "server", "date", "x-request-id"):
+                continue
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("X-Request-Id", request_id)
+        self.end_headers()
+        self._headers_sent = True
+        self.wfile.write(raw)
+
+    def _relay_sse(self, upstream: http.client.HTTPResponse, request_id: str, rewriter: Rewriter) -> None:
+        self.send_response(upstream.status)
+        for key, value in upstream.getheaders():
+            lower = key.lower()
+            if lower in HOP_BY_HOP or lower in ("content-length", "server", "date", "x-request-id"):
+                continue
+            self.send_header(key, value)
+        self.send_header("X-Request-Id", request_id)
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self.end_headers()
+        self._headers_sent = True
+
+        state = rewriter.stream(request_id)
+        pending = b""
+        done = False
+
+        def emit_obj(obj: dict[str, Any]) -> None:
+            self.wfile.write(b"data: " + json.dumps(obj, separators=(",", ":")).encode("utf-8") + b"\n\n")
+
+        def handle_event(event: bytes) -> None:
+            nonlocal done
+            out_lines = []
+            for line in event.split(b"\n"):
+                if line.startswith(b"data:"):
+                    data = line[5:].strip()
+                    if data == b"[DONE]":
+                        for obj in state.drain():
+                            emit_obj(obj)
+                        done = True
+                        out_lines.append(b"data: [DONE]")
+                        continue
+                    try:
+                        obj = json.loads(data)
+                    except ValueError:
+                        out_lines.append(line)
+                        continue
+                    if isinstance(obj, dict):
+                        obj = state.chunk(obj)
+                    out_lines.append(b"data: " + json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+                else:
+                    out_lines.append(line)
+            self.wfile.write(b"\n".join(out_lines) + b"\n\n")
+
+        while True:
+            try:
+                chunk = upstream.read1(65536)
+            except AttributeError:  # pragma: no cover - Python without read1
+                chunk = upstream.read(1)
+            if not chunk:
+                break
+            pending += chunk.replace(b"\r\n", b"\n")
+            while b"\n\n" in pending:
+                event, pending = pending.split(b"\n\n", 1)
+                if event.strip():
+                    handle_event(event)
+            self.wfile.flush()
+        if pending.strip():
+            handle_event(pending)
+        if not done:
+            for obj in state.drain():
+                emit_obj(obj)
+        self.wfile.flush()
 
     # -- request/response helpers -----------------------------------------
     def _read_body(self) -> bytes:
