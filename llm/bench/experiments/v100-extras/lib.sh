@@ -93,8 +93,10 @@ verify_recipe() { # engine log -> 0/1
   vlog "engine recipe verified ($SERVER_PHASE)"
 }
 
-start_server() { # pack_dir window parallel gpus phase outdir
+start_server() { # pack_dir window parallel gpus phase outdir [extra launch args...]
   local pack=$1 window=$2 par=$3 gpus=$4 phase=$5 out=$6
+  shift 6
+  local extra=("$@")
   SERVER_PHASE=$phase SERVER_PAR=$par SERVER_OUT=$out
   # Control's runtime state is a Unix-domain socket.  Lustre (/work) cannot
   # bind one: a server whose STRATA_RUNTIME_DIR lived under the results tree
@@ -126,7 +128,7 @@ start_server() { # pack_dir window parallel gpus phase outdir
       --yes --no-tui --restart \
       --set kv-resident=32768 --set expert-cache=auto --set prefill=auto \
       --set ple-io=ram --set spec=4 --set spec-min-p=0.5 \
-      --set "mtp=$SERVER_DATA/mtp/rt" >"$logf" 2>&1; then
+      --set "mtp=$SERVER_DATA/mtp/rt" "${extra[@]}" >"$logf" 2>&1; then
     vlog "FATAL: launch failed; tail of $logf:"; tail -n 20 "$logf" || true
     return 1
   fi

@@ -66,6 +66,40 @@ Recipes (benchctl): `strata-v100-resident-2x-iq3s`,
 `strata-v100-prefill-chunks-131k`, `strata-v100-batchmtp-lookup-coder`.
 `strata-chain-v100-4x` is the existing chain recipe.
 
+## 2026-10-28 — remaining R1–R3 (one allocation, `run-remaining.sh`)
+
+Follow-up after the 2026-10-27 extras: the three questions that the first
+session could not close. One allocation on **volta05** (4× V100-SXM2-32GB),
+packs staged once to node-local `/tmp`, results in
+`/work/ffa/holecem/strata-runs/2026-10-28-v100-remaining/`.
+
+| item | question | method |
+|:--|:--|:--|
+| **R1** | quality at **262,144** for Coder IQ1_M and Q2_0 (IQ3_S was already 6/6 + 1/1) | `niah.py --contexts 262144` unchanged: 3 positions × 2 cold repeats + tool canary, calibrated, clamped. 2× first (`--gpus 0,1`); on a launch failure the exact engine error is captured and the pack retried on 4×. |
+| **R2** | is the 155 GB/s/GPU NVLink actually used, or is the layer split confined to PCIe? | `p2p.sh` (topology/NVLink/`nvidia-smi nvlink --help`), `p2pbench.c` (driver-API `cuMemcpyPeerAsync` 256 MiB 0→1 and 0→2 vs host-staged), and `memcpy-trace.c` (LD_PRELOAD shim) on three 4× layer-split 32k cells: default, traced, and `STRATA_PEER_NO_P2P=1`. |
+| **R3** | do the 262k HTTP 400 probe-window rejections disappear with the calibrated/clamped probe? | `stability.py` 45 min at C1, alternating a unique-salt cold 262k turn with a byte-identical warm turn, one JSON line per request (TTFT, tokens, reused, exact error), power + RAM per iteration. |
+
+New scripts:
+
+```text
+p2pbench.c         driver API (dlopen libcuda) peer/HBM/PCIe bandwidth bench;
+                   gcc only — the node's nvcc is CUDA 13.4 and emits no sm_70
+memcpy-trace.c     LD_PRELOAD shim for cudaMemcpy{,Async,Peer,PeerAsync} and
+                   peer-access calls; one TSV row per call (transport evidence)
+trace-summary.py   aggregates the TSV by (function, kind) inside a time window
+stability.py       R3 calibrated cold/warm 262k loop, per-request errors/drift
+run-remaining.sh   the R1–R3 orchestrator (this is what sbatch runs)
+```
+
+```bash
+sbatch --nice=100 llm/bench/experiments/v100-extras/run-remaining.sh
+```
+
+Node-local discipline: the `#SBATCH --output` is `/tmp/strata-v100-rem-%j.out`,
+every engine log and pack is under `/tmp/v100-rem-$JOB`, and `publish()` copies
+only small JSONL/CSV/JSON/TXT summaries to Lustre after each phase. The runner
+never reads a live file from `/work`.
+
 ## Run
 
 ```bash
