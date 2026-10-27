@@ -77,6 +77,34 @@ class HpcError(RuntimeError):
     """A recoverable failure: bad ssh call, unusable cluster reply, no node."""
 
 
+class CapRefused(HpcError):
+    """The atomic submit found ``max_jobs`` of our prefixed jobs already queued or running."""
+
+
+#: Exit code of the remote capped submit when the cap is full (same as hpc_run.sh's refusal).
+CAP_EXIT = 3
+
+
+def capped_sbatch_command(
+    sbatch_path: str, *, lock_path: str, user: str, job_prefix: str, max_jobs: int
+) -> str:
+    """One remote shell command: under ``flock``, count our jobs and sbatch only below the cap.
+
+    Counting in squeue and then submitting in a separate ssh call let two submitters both see
+    5 of 6 and both submit. Holding one cluster-side lock across the count and the sbatch makes
+    the cap exact for every submitter that uses the same lock file.
+    """
+    if max_jobs < 1:
+        raise ValueError("max_jobs must be >= 1")
+    inner = (
+        f"n=$(squeue -h -u {shlex.quote(user)} -o %j | grep -c {shlex.quote('^' + job_prefix)} || true); "
+        f'if [ "$n" -ge {int(max_jobs)} ]; then echo "cap: $n of {int(max_jobs)} '
+        f'{job_prefix}* jobs live" >&2; exit {CAP_EXIT}; fi; '
+        f"sbatch --parsable {shlex.quote(sbatch_path)}"
+    )
+    return f"flock -w 120 {shlex.quote(lock_path)} sh -c {shlex.quote(inner)}"
+
+
 @dataclass(frozen=True)
 class Node:
     """One candidate GPU node (already filtered and ranked)."""
@@ -468,8 +496,19 @@ def submit_run(
     partition_rank: Mapping[str, int] | None = None,
     allowed_partition: Sequence[str] = (),
     nice: int | None = None,
+    no_wait: bool = False,
+    max_jobs: int | None = None,
+    job_prefix: str | None = None,
+    user: str | None = None,
 ) -> str:
     """Submit one GPU batch job and return the local results path.
+
+    ``no_wait``: return right after ``sbatch`` with a JSON line (job id, remote dir, remote
+    output) instead of polling, fetching and cleaning up. The caller fetches later; this is
+    for callers whose single command is time-limited (lane turns).
+
+    ``max_jobs`` (with ``job_prefix`` and ``user``): submit through ``capped_sbatch_command``
+    so the count of our jobs and the sbatch happen under one cluster-side lock.
 
     Dry-run (``not yes`` or ``dry_run=True``) prints the plan and returns the
     intended local results path without touching the remote.
@@ -539,10 +578,39 @@ def submit_run(
     _rsync(ssh, f"{local_batch.rstrip('/')}/", f"{ssh}:{batch_dir}/")
     _write_remote_file(ssh, sbatch_path, script)
 
-    jid = run_ssh(ssh, f"sbatch --parsable {shlex.quote(sbatch_path)}").strip()
+    if max_jobs is not None:
+        if not job_prefix or not user:
+            raise HpcError("max_jobs needs job_prefix and user")
+        lock = f"{remote_tmp.rstrip('/')}/.slurmhelps-submit.lock"
+        cmd = capped_sbatch_command(
+            sbatch_path, lock_path=lock, user=user, job_prefix=job_prefix, max_jobs=max_jobs
+        )
+        try:
+            jid = run_ssh(ssh, cmd).strip()
+        except HpcError as e:
+            if f"rc={CAP_EXIT}" in str(e):
+                run_ssh(ssh, f"rm -rf {shlex.quote(batch_dir)}")
+                raise CapRefused(str(e)) from e
+            raise
+    else:
+        jid = run_ssh(ssh, f"sbatch --parsable {shlex.quote(sbatch_path)}").strip()
     jid = jid.split(";", 1)[0].split(".", 1)[0]
     if not jid:
         raise HpcError(f"sbatch returned no job id for {remote_name!r}")
+    if no_wait:
+        print(
+            json.dumps(
+                {
+                    "job_id": jid,
+                    "remote_name": remote_name,
+                    "remote_dir": batch_dir,
+                    "remote_output": output,
+                    "node": node.node,
+                    "partition": sel_partition,
+                }
+            )
+        )
+        return results_local
 
     deadline = time.monotonic() + poll_timeout
     while True:
@@ -627,6 +695,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--nice", type=int, default=None, help="#SBATCH --nice (>= 0; lower priority)")
     run.add_argument("--yes", action="store_true", help="actually submit (else dry-run)")
     run.add_argument("--dry-run", action="store_true", help="force dry-run")
+    run.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="return after sbatch with a JSON line; do not poll, fetch or clean up",
+    )
+    run.add_argument("--max-jobs", type=int, default=None, help="atomic cap on our prefixed jobs")
+    run.add_argument("--job-prefix", default=None, help="job-name prefix counted by --max-jobs")
+    run.add_argument("--user", default=None, help="squeue user counted by --max-jobs")
     _add_selection_flags(run)
     return ap
 
@@ -677,8 +753,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         partition_rank=dict(args.partition_rank),
         allowed_partition=args.allowed_partition,
         nice=args.nice,
+        no_wait=args.no_wait,
+        max_jobs=args.max_jobs,
+        job_prefix=args.job_prefix,
+        user=args.user,
     )
-    print(results)
+    if not args.no_wait:
+        print(results)
     return 0
 
 
@@ -689,6 +770,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "probe":
             return _cmd_probe(args)
         return _cmd_run(args)
+    except CapRefused as e:
+        print(f"gpu_batch: refused: {e}", file=sys.stderr)
+        return CAP_EXIT
     except HpcError as e:
         print(f"gpu_batch: error: {e}", file=sys.stderr)
         return 1
