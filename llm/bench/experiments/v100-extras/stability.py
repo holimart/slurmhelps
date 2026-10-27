@@ -27,6 +27,7 @@ Usage:
 """
 import argparse
 import json
+import signal
 import os
 import statistics
 import subprocess
@@ -122,6 +123,13 @@ def main():
     seen = set()
     deadline = time.monotonic() + args.duration_min * 60.0
     started = time.monotonic()
+    stop = {"now": False}
+
+    def on_term(signum, frame):  # Slurm's TERM on the wall clock
+        stop["now"] = True
+
+    signal.signal(signal.SIGTERM, on_term)
+    signal.signal(signal.SIGINT, on_term)
     rows = []
     iteration = 0
     consecutive_failed_iterations = 0
@@ -133,7 +141,7 @@ def main():
             fh.write(json.dumps(row, sort_keys=False) + "\n")
         rows.append(row)
 
-    while time.monotonic() < deadline:
+    while time.monotonic() < deadline and not stop["now"]:
         if args.max_iterations and iteration >= args.max_iterations:
             break
         iteration += 1
@@ -144,7 +152,7 @@ def main():
         emit({"kind": "cold", "iteration": iteration, **rec})
         # --- warm turn: identical prompt, one initial + N repeats ----------
         for i in range(1 + args.warm_repeats):
-            if time.monotonic() >= deadline:
+            if time.monotonic() >= deadline or stop["now"]:
                 break
             rec = request(base, args.model, warm_prompt, args.max_tokens,
                           args.temperature, args.timeout, seen, lock,

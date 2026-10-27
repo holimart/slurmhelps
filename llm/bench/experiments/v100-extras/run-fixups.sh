@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=340G
-#SBATCH --time=01:30:00
+#SBATCH --time=02:00:00
 #SBATCH --nice=100
 #SBATCH --output=/work/ffa/holecem/logs/strata-v100-fixup-%j.out
 #
@@ -66,10 +66,14 @@ exec > >(tee -a "$RUN/stdout.log") 2>&1
 exec 9>>"$RUN/xtrace.log"
 export BASH_XTRACEFD=9
 set -E
-trap 'rc=$?; echo "[fixup] EXIT rc=$rc line=$LINENO" >> "$RUN/session.log"; mkdir -p "$OUT/r2-engine-fixup" "$OUT/r3-stability"; cp "$RUN/session.log" "$OUT/r2-engine-fixup/session.log" 2>/dev/null; cp "$RUN/stdout.log" "$OUT/r2-engine-fixup/stdout.log" 2>/dev/null; cp "$RUN/xtrace.log" "$OUT/r2-engine-fixup/xtrace.log" 2>/dev/null' EXIT
+trap 'rc=$?; echo "[fixup] EXIT rc=$rc line=$LINENO" >> "$RUN/session.log"; mkdir -p "$OUT/r2-engine-fixup" "$OUT/r3-stability"; publish_phase r2-engine-fixup r3-stability; cp "$RUN/session.log" "$OUT/r2-engine-fixup/session.log" 2>/dev/null; cp "$RUN/stdout.log" "$OUT/r2-engine-fixup/stdout.log" 2>/dev/null; cp "$RUN/xtrace.log" "$OUT/r2-engine-fixup/xtrace.log" 2>/dev/null; cp "$LOG" "$OUT/r3-stability/session.log" 2>/dev/null' EXIT
 trap 'echo "[fixup] ERR rc=$? line=$LINENO cmd=$BASH_COMMAND" >> "$RUN/session.log"' ERR
 set -x
 log() { printf '[fixup] %s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
+publish_phase() { # dirs under $RUN
+  ( cd "$RUN" && find "$@" -type f ! -path '*/data-*' \
+      ! -name '*.engine.log' ! -size +8M -exec cp --parents {} "$OUT/" \; ) 2>/dev/null || true
+}
 
 source "$EXTRAS/lib.sh"
 
@@ -154,6 +158,7 @@ else
   log "no-P2P server failed"; stop_server
 fi
 unset STRATA_PEER_NO_P2P
+publish_phase r2-engine-fixup
 
 # ============================ R3: 262k stability ===========================
 mkdir -p "$RUN/r3-stability"
@@ -162,7 +167,7 @@ if start_server "$PACKS/iq3s" 262144 4 0,1,2,3 r3f "$RUN/r3-stability/server"; t
   python3 "$EXTRAS/stability.py" \
     --base-url "$(server_base)" --model "$SERVER_MODEL" \
     --context 262144 --max-context 262144 --max-tokens 128 --pad-safety 2048 \
-    --warm-repeats 2 --duration-min 45 \
+    --warm-repeats 2 --duration-min 38 \
     --json-out "$RUN/r3-stability/cells.jsonl" \
     --summary-out "$RUN/r3-stability/summary.json" \
     >"$RUN/r3-stability/run.log" 2>&1 || log "R3 loop exited non-zero"
