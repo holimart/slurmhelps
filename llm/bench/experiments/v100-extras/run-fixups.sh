@@ -58,8 +58,17 @@ for d in /tmp/v100-extras-state-*; do
 done
 mkdir -p "$PACKS" "$RUN/bin" "$RUN/r2-engine-fixup" "$OUT"
 
-exec >>"$RUN/stdout.log" 2>&1
-log() { printf '[r2-fixup] %s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
+# Full diagnostics stay node-local, but an EXIT trap copies the (small)
+# session/xtrace logs to Lustre even when the job dies early — the previous
+# run failed at 1:31 and left a 0-byte Slurm capture with no clue.
+exec > >(tee -a "$RUN/stdout.log") 2>&1
+exec 9>>"$RUN/xtrace.log"
+export BASH_XTRACEFD=9
+set -E
+trap 'rc=$?; echo "[fixup] EXIT rc=$rc line=$LINENO" >> "$RUN/session.log"; mkdir -p "$OUT/r2-engine-fixup" "$OUT/r3-stability"; cp "$RUN/session.log" "$OUT/r2-engine-fixup/session.log" 2>/dev/null; cp "$RUN/stdout.log" "$OUT/r2-engine-fixup/stdout.log" 2>/dev/null; cp "$RUN/xtrace.log" "$OUT/r2-engine-fixup/xtrace.log" 2>/dev/null' EXIT
+trap 'echo "[fixup] ERR rc=$? line=$LINENO cmd=$BASH_COMMAND" >> "$RUN/session.log"' ERR
+set -x
+log() { printf '[fixup] %s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 
 source "$EXTRAS/lib.sh"
 
