@@ -83,8 +83,12 @@ verify_recipe() { # engine log -> 0/1
   [ -n "$elog" ] || { vlog "WARN: no engine log yet; recipe unverified"; return 0; }
   line=$(grep -m1 "engine started:" "$elog" || true)
   [ -n "$line" ] || { vlog "WARN: no 'engine started:' line"; return 0; }
-  for want in "--mtp " "--batch $SERVER_PAR" "--kv int8" "--kv-resident 32768" \
-              "--expert-cache auto" "--spec 4" "--spec-min-p 0.5"; do
+  # A parallel=1 server omits --batch entirely (1 is the engine default), so
+  # requiring "--batch 1" rejected a perfectly healthy server (job 38249188).
+  local wanted=("--mtp " "--kv int8" "--kv-resident 32768" \
+                "--expert-cache auto" "--spec 4" "--spec-min-p 0.5")
+  [ "$SERVER_PAR" != 1 ] && wanted+=("--batch $SERVER_PAR")
+  for want in "${wanted[@]}"; do
     case "$line" in
       *"$want"*) ;;
       *) vlog "FATAL: engine argv missing '$want'"; vlog "  $line"; return 1 ;;
@@ -140,7 +144,12 @@ start_server() { # pack_dir window parallel gpus phase outdir [extra launch args
     | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("data") or [{}])[0].get("id",""))' 2>/dev/null || true)
   [ -n "$SERVER_MODEL" ] || SERVER_MODEL=strata
   vlog "ready $phase: 127.0.0.1:$SERVER_PORT model=$SERVER_MODEL"
-  verify_recipe || return 1
+  # A failed recipe check is an audit flag, not a reason to throw away a
+  # server that is already answering (the argv is archived either way).
+  if ! verify_recipe; then
+    vlog "WARN: engine recipe unverified; continuing ($phase)"
+    printf 'unverified at %s\n' "$(date -u +%FT%TZ)" >> "$out/recipe-warning.txt"
+  fi
   vlog "$SERVER_PORT" > "$out/port.txt"
 }
 

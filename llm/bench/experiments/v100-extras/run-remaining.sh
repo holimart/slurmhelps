@@ -59,8 +59,17 @@ SH2=Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 
 # /tmp on volta05 persists between jobs.  A previous attempt can leave the
 # whole 206 GB full (job 38249052 did, and ENOSPC then killed every launch).
-# Remove only our own stale trees before creating anything.
-for d in /tmp/v100-rem-*; do
+# Packs staged by a cancelled attempt on the same node are byte-identical, so
+# keep the newest set (an instant rename) and drop everything else.
+mkdir -p "$RUN"
+BEST=$(ls -dt /tmp/v100-rem-*/packs 2>/dev/null | head -1 || true)
+if [ -n "$BEST" ] && [ ! -e "$PACKS" ]; then
+  if mv "$BEST" "$PACKS" 2>/dev/null; then
+    echo "[v100-rem] reused packs from $BEST"
+    rmdir "$(dirname "$BEST")" 2>/dev/null || true
+  fi
+fi
+for d in /tmp/v100-rem-* /tmp/v100-extras-state-*; do
   [ -d "$d" ] || continue
   [ "$d" = "$RUN" ] && continue
   [ -O "$d" ] || continue
@@ -131,6 +140,17 @@ start_stage() { # name src dst
   cp "$2" "$3" & STAGE_PID[$1]=$!
   log "staging $1 -> $3 (pid ${STAGE_PID[$1]}, $(free_gb) GiB free)"
 }
+stage_or_verify() { # name src dst
+  local src=$2 dst=$3
+  if [ -f "$dst" ] && [ "$(stat -c %s "$dst" 2>/dev/null)" = "$(stat -c %s "$src" 2>/dev/null)" ]; then
+    STAGE_DONE[$1]=1
+    STAGE_DST[$1]=$dst
+    log "reusing staged $1 ($(du -h "$dst" 2>/dev/null | cut -f1), size matches)"
+    return 0
+  fi
+  [ -f "$dst" ] && { log "removing incomplete $dst"; rm -f "$dst"; }
+  start_stage "$1" "$src" "$dst"
+}
 finish_stage() { # name
   local name=$1 pid=${STAGE_PID[$1]:-}
   [ -n "${STAGE_DONE[$1]:-}" ] && return 0
@@ -148,9 +168,9 @@ link_shared() { # packdir shard2name
   log "linked shared PLE table into $1/$2"
 }
 
-start_stage ple "$MODELS/iq3s/$I3S2" "$PACKS/_shared/$SH2"
-start_stage coder "$MODELS/coder/$COS1" "$PACKS/coder/$COS1"
-start_stage q2_0 "$MODELS/q2_0/$Q2S1" "$PACKS/q2_0/$Q2S1"
+stage_or_verify ple "$MODELS/iq3s/$I3S2" "$PACKS/_shared/$SH2"
+stage_or_verify coder "$MODELS/coder/$COS1" "$PACKS/coder/$COS1"
+stage_or_verify q2_0 "$MODELS/q2_0/$Q2S1" "$PACKS/q2_0/$Q2S1"
 
 # IQ3_S is 54.8 GB and only needed for R2b/R3.  Starting it after the coder
 # pack is deleted keeps peak /tmp use at ~126 GB instead of ~151 GB (the
@@ -159,7 +179,7 @@ IQ3S_STARTED=0
 start_iq3s() {
   [ "$IQ3S_STARTED" = 1 ] && return 0
   IQ3S_STARTED=1
-  start_stage iq3s "$MODELS/iq3s/$I3S1" "$PACKS/iq3s/$I3S1"
+  stage_or_verify iq3s "$MODELS/iq3s/$I3S1" "$PACKS/iq3s/$I3S1"
 }
 
 # ---- helpers ---------------------------------------------------------------
