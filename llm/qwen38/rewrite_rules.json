@@ -8,6 +8,12 @@
       "history": "(link removed)"
     },
     {
+      "name": "signed-url",
+      "pattern": "https?://[^\\s\\\"'<>()\\[\\]{}\\\\`]*?(?:/proxy_temp_file/|/trace_[0-9a-f]{20,}/requestId_[0-9a-f]{20,})[^\\s\\\"'<>()\\[\\]{}\\\\`]*",
+      "replacement": "https://blocked.invalid/removed-url",
+      "history": "(link removed)"
+    },
+    {
       "name": "host",
       "pattern": "[^\\s\\\"'<>()\\[\\]{}\\\\`]*?(?:alibaba|aliyun|alicdn|dashscope|routi[fz]|ossaccesskeyid)[^\\s\\\"'<>()\\[\\]{}\\\\`]*",
       "replacement": "removed-host",
