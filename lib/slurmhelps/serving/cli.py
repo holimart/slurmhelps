@@ -29,6 +29,7 @@ from typing import Any
 from .config import ServingConfig
 from .controller import Controller
 from .gateway import GatewayServer, load_bad_words
+from .rewrite import Rewriter, default_rules, load_rules
 from .mock import MockOpenAIServer
 from .spill import SpillManager
 from .state import StateStore
@@ -365,6 +366,10 @@ def cmd_gateway(args: argparse.Namespace) -> int:
     bad_words = list(args.bad_word or [])
     if args.bad_words_file:
         bad_words += load_bad_words(args.bad_words_file)
+    rewriter = None
+    if args.rewrite_rules:
+        rules = default_rules() if args.rewrite_rules == "default" else load_rules(args.rewrite_rules)
+        rewriter = Rewriter(rules, log_path=args.rewrite_log or None)
     max_active = None if args.max_active < 0 else (args.max_active or cfg.max_num_seqs)
     gateway = GatewayServer(
         upstream=upstream,
@@ -375,6 +380,7 @@ def cmd_gateway(args: argparse.Namespace) -> int:
         coalesce_ms=args.coalesce_ms if args.coalesce_ms is not None else cfg.coalesce_ms,
         timeout=args.timeout,
         bad_words=bad_words,
+        rewriter=rewriter,
     ).start()
     print(gateway.base_url, flush=True)
     try:
@@ -511,6 +517,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="string the model may not emit (repeatable)")
     p.add_argument("--bad-words-file", default="",
                    help="JSON list of banned strings merged into every completion request")
+    p.add_argument("--rewrite-rules", default="",
+                   help="'default' or a JSON rules file: scrub history and rewrite output")
+    p.add_argument("--rewrite-log", default="", help="JSONL log of every rewrite (original text)")
     p.set_defaults(func=cmd_gateway)
 
     p = sub.add_parser("smoke", help="run the HTTP smoke matrix")

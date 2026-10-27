@@ -26,6 +26,9 @@ MTP=${MTP:-1}
 # completion request. QWEN38_GATEWAY=0 serves bare vLLM on $PORT as before.
 GATEWAY=${QWEN38_GATEWAY:-1}
 BAD_WORDS_FILE=${QWEN38_BAD_WORDS:-$HELPER/bad_words.json}
+# History scrub + output rewrite (empty QWEN38_REWRITE_RULES disables it).
+REWRITE_RULES=${QWEN38_REWRITE_RULES-$HELPER/rewrite_rules.json}
+REWRITE_LOG=${QWEN38_REWRITE_LOG:-$ROOT/.slurmhelps-serve/qwen38-flash-next/rewrites.jsonl}
 if [ "$GATEWAY" = 1 ]; then
   VLLM_HOST=127.0.0.1
   VLLM_PORT=${QWEN38_VLLM_PORT:-$((PORT + 1))}
@@ -159,8 +162,13 @@ printf '[qwen38-container] persistent_cache=%s\n' "$CACHE_ROOT"
 printf '[qwen38-container] command:'; printf ' %q' "${CMD[@]}"; printf '\n'
 if [ "$GATEWAY" = 1 ]; then
   [ -f "$BAD_WORDS_FILE" ] || { echo "qwen38 container: missing $BAD_WORDS_FILE" >&2; exit 2; }
-  exec "$ROOT/bin/serve_with_gateway.sh" --config "$HELPER/config-bw.json" \
-    --port "$PORT" --upstream-port "$VLLM_PORT" --bad-words-file "$BAD_WORDS_FILE" \
-    -- "${CMD[@]}"
+  GW=(--config "$HELPER/config-bw.json" --port "$PORT" --upstream-port "$VLLM_PORT"
+      --bad-words-file "$BAD_WORDS_FILE")
+  if [ -n "$REWRITE_RULES" ]; then
+    [ -f "$REWRITE_RULES" ] || { echo "qwen38 container: missing $REWRITE_RULES" >&2; exit 2; }
+    mkdir -p "$(dirname "$REWRITE_LOG")"
+    GW+=(--rewrite-rules "$REWRITE_RULES" --rewrite-log "$REWRITE_LOG")
+  fi
+  exec "$ROOT/bin/serve_with_gateway.sh" "${GW[@]}" -- "${CMD[@]}"
 fi
 exec "${CMD[@]}"
