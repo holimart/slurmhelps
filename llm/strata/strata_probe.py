@@ -298,6 +298,14 @@ def stream_one(base, model, prompt, max_tokens, temperature, timeout):
                         t_first = time.monotonic() - t0
                     if piece:
                         content_chunks += 1
+    except urllib.error.HTTPError as exc:  # keep the body: it names the limit
+        try:
+            detail = exc.read(2048).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            detail = ""
+        rec["error"] = "HTTPError %s: %s" % (exc.code, (detail or str(exc))[:300])
+        rec["total_s"] = time.monotonic() - t0
+        return rec
     except Exception as exc:  # noqa: BLE001 - report, do not crash the cell
         rec["error"] = "%s: %s" % (type(exc).__name__, exc)
         rec["total_s"] = time.monotonic() - t0
