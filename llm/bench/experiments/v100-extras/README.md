@@ -77,7 +77,13 @@ packs staged once to node-local `/tmp`, results in
 |:--|:--|:--|
 | **R1** | quality at **262,144** for Coder IQ1_M and Q2_0 (IQ3_S was already 6/6 + 1/1) | `niah.py --contexts 262144` unchanged: 3 positions × 2 cold repeats + tool canary, calibrated, clamped. 2× first (`--gpus 0,1`); on a launch failure the exact engine error is captured and the pack retried on 4×. |
 | **R2** | is the 155 GB/s/GPU NVLink actually used, or is the layer split confined to PCIe? | `p2p.sh` (topology/NVLink/`nvidia-smi nvlink --help`), `p2pbench.c` (engine's own `libcudart.so.12` via dlopen: `cudaMemcpyPeerAsync` 256 MiB 0→1 and 0→2 vs `cudaMemcpyAsync(Default)` vs host-staged), NVLink `-gt d` throughput counters around each cell, and `memcpy-trace.c` (LD_PRELOAD shim) on three 4× layer-split 32k cells: default, traced, and `STRATA_PEER_NO_P2P=1`. |
-| **R3** | do the 262k HTTP 400 probe-window rejections disappear with the calibrated/clamped probe? | `stability.py` 45 min at C1, alternating a unique-salt cold 262k turn with a byte-identical warm turn, one JSON line per request (TTFT, tokens, reused, exact error), power + RAM per iteration. |
+| **R3** | do the 262k HTTP 400 probe-window rejections disappear with the calibrated/clamped probe? | `stability.py` 45 min at C1, alternating a unique-salt cold 262k turn with a byte-identical warm turn, one JSON line per request (TTFT, tokens, reused, exact error), power + RAM per iteration. **The default 128-token safety was still too small at 262k** (calibration error ~320 tokens ⇒ every request 400); the clean run uses `--pad-safety 2048`. |
+
+Results are written up in
+[`llm/strata/experiments/2026-10-28-v100-remaining.md`](../../../strata/experiments/2026-10-28-v100-remaining.md):
+R1 6/6 + 1/1 for both packs, R2 shows 48.5 GB/s peer vs 12.4 GB/s host but
+the layer split never enables peer access (host ring), R3 0/105 errors with
++0.2 % TTFT drift.
 
 New scripts:
 
@@ -91,10 +97,14 @@ trace-summary.py   aggregates the TSV by (function, kind) inside a time window
 nvlink-delta.py    per-GPU NVLink data-payload delta from `nvidia-smi nvlink -gt d`
 stability.py       R3 calibrated cold/warm 262k loop, per-request errors/drift
 run-remaining.sh   the R1–R3 orchestrator (this is what sbatch runs)
+run-fixups.sh      corrective R2 cells (real 32k window, device-attributed
+                   copy trace) + the R3 rerun with --pad-safety 2048
 ```
 
 ```bash
 sbatch --nice=100 llm/bench/experiments/v100-extras/run-remaining.sh
+# corrective cells, only if the first pass exposes a harness defect:
+sbatch --nice=100 llm/bench/experiments/v100-extras/run-fixups.sh
 ```
 
 Node-local discipline: the `#SBATCH --output` is `/tmp/strata-v100-rem-%j.out`,
