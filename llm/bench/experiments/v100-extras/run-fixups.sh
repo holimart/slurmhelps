@@ -37,6 +37,7 @@ OUT=/work/ffa/holecem/strata-runs/2026-10-28-v100-remaining
 LOG=$RUN/session.log
 
 I3S1=Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf
+I3S2=Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf
 SH2=Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 
 mkdir -p "$RUN"
