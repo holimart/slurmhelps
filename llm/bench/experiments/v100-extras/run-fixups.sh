@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=strata-r2-fixup
+#SBATCH --job-name=strata-v100-fixup
 #SBATCH --partition=ffa-gpulab
 #SBATCH --nodelist=volta05
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=340G
-#SBATCH --time=00:45:00
+#SBATCH --time=01:30:00
 #SBATCH --nice=100
-#SBATCH --output=/work/ffa/holecem/logs/strata-r2-fixup-%j.out
+#SBATCH --output=/work/ffa/holecem/logs/strata-v100-fixup-%j.out
 #
-# R2 fixup: the first R2b cells asked for a 32,768-token prompt but passed
-# --max-context 262144, so the probe did not clamp and three of four cells were
-# rejected with HTTP 400 before any measurement.  This short job reuses the
-# IQ3_S pack left in /tmp by the main run and repeats the three cells with the
-# server's real window (32,768 → target 32,512), now also recording the device
-# of every copy's source/destination buffer (memcpy-trace v2).
+# Fixups for the two harness defects the main run exposed (job 38249448):
 #
-# Cells: default (no shim) | traced | STRATA_PEER_NO_P2P=1 (no shim)
+# R2: the first cells asked for a 32,768-token prompt but passed
+#     --max-context 262144, so the probe did not clamp and three of four cells
+#     were rejected with HTTP 400.  Repeat them with the real window
+#     (32,768 → target 32,128 with a 512-token safety), recording the device of
+#     every copy's source/destination buffer (memcpy-trace v2).
+#     Cells: default (no shim) | traced | STRATA_PEER_NO_P2P=1 (no shim)
+#
+# R3: the 262k loop used the default 128-token safety; calibration error put
+#     the prompt 320 tokens past the window, so all 19,420 requests were
+#     HTTP 400.  Repeat the 45 min loop with --pad-safety 2048
+#     (target 259,968) and per-request error bodies.
+#
+# Reuses the IQ3_S pack the main run leaves in /tmp.
 set -uo pipefail
 
 ROOT=${SLURMHELPS_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}
@@ -87,7 +94,8 @@ probe_cell() { # outdir label
   python3 "$HELPER/strata_probe.py" \
     --base-url "http://127.0.0.1:$SERVER_PORT" --model "$SERVER_MODEL" \
     --context 32768 --concurrency 1 --max-context 32768 \
-    --max-tokens 128 --requests-per-slot 2 --json-out "$out/cells.jsonl"
+    --pad-safety 512 --max-tokens 128 --requests-per-slot 2 \
+    --json-out "$out/cells.jsonl"
 }
 
 run_cell() { # outdir label
@@ -137,9 +145,27 @@ else
 fi
 unset STRATA_PEER_NO_P2P
 
+# ============================ R3: 262k stability ===========================
+mkdir -p "$RUN/r3-stability"
+if start_server "$PACKS/iq3s" 262144 4 0,1,2,3 r3f "$RUN/r3-stability/server"; then
+  bash "$EXTRAS/power-sampler.sh" "$RUN/r3-stability/power.csv" & samp=$!
+  python3 "$EXTRAS/stability.py" \
+    --base-url "$(server_base)" --model "$SERVER_MODEL" \
+    --context 262144 --max-context 262144 --max-tokens 128 --pad-safety 2048 \
+    --warm-repeats 2 --duration-min 45 \
+    --json-out "$RUN/r3-stability/cells.jsonl" \
+    --summary-out "$RUN/r3-stability/summary.json" \
+    >"$RUN/r3-stability/run.log" 2>&1 || log "R3 loop exited non-zero"
+  kill "$samp" 2>/dev/null || true
+  stop_server; archive_engine "$RUN/r3-stability/server"
+else
+  log "R3 server failed"; stop_server
+fi
+
 # ---- publish --------------------------------------------------------------
-( cd "$RUN" && find r2-engine-fixup -type f ! -path '*/data-*' \
+( cd "$RUN" && find r2-engine-fixup r3-stability -type f ! -path '*/data-*' \
     ! -name '*.engine.log' ! -size +8M -exec cp --parents {} "$OUT/" \; ) 2>/dev/null || true
 cp "$LOG" "$OUT/r2-engine-fixup/session.log" 2>/dev/null || true
 cp "$RUN/stdout.log" "$OUT/r2-engine-fixup/stdout.log" 2>/dev/null || true
+cp "$LOG" "$OUT/r3-stability/session.log" 2>/dev/null || true
 echo "[r2-fixup] done"

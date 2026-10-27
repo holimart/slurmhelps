@@ -121,8 +121,11 @@ def main():
     lock = threading.Lock()
     seen = set()
     deadline = time.monotonic() + args.duration_min * 60.0
+    started = time.monotonic()
     rows = []
     iteration = 0
+    consecutive_failed_iterations = 0
+    aborted = None
 
     def emit(row):
         row.setdefault("ts", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
@@ -153,12 +156,26 @@ def main():
               "mem_total_mib": mi.get("MemTotal"),
               "mem_available_mib": mi.get("MemAvailable"),
               "gpus": gpu_memory()})
+        iteration_requests = [r for r in rows
+                              if r.get("iteration") == iteration
+                              and r.get("kind") in ("cold", "warm", "warm-cold")]
+        iteration_ok = [r for r in iteration_requests if r.get("ok")]
+        consecutive_failed_iterations = (0 if iteration_ok
+                                         else consecutive_failed_iterations + 1)
+        # A probe/window bug must not burn the whole allocation spinning on
+        # instant HTTP 400s (job 38249448 did: 19,420 rejections in 45 min).
+        if consecutive_failed_iterations >= 3:
+            aborted = ("3 consecutive iterations with no successful request; "
+                       "first error: %s" % (iteration_requests[0].get("error") or "")[:300])
+            print("[stability] ABORT: " + aborted, file=sys.stderr)
+            break
         cold = [r for r in rows if r["kind"] == "cold" and r.get("ok")]
-        print("[stability] iter=%d cold=%d/%d ttft=%s dec=%s mem_avail=%s"
-              % (iteration, len(cold), iteration,
-                 "%.1f" % cold[-1]["ttft_s"] if cold and cold[-1].get("ttft_s") else "-",
-                 "%.1f" % cold[-1]["decode_tok_s"] if cold and cold[-1].get("decode_tok_s") else "-",
-                 mi.get("MemAvailable")), file=sys.stderr)
+        if iteration % 10 == 0 or not iteration_ok:
+            print("[stability] iter=%d ok=%d/%d ttft=%s dec=%s mem_avail=%s"
+                  % (iteration, len(iteration_ok), len(iteration_requests),
+                     "%.1f" % cold[-1]["ttft_s"] if cold and cold[-1].get("ttft_s") else "-",
+                     "%.1f" % cold[-1]["decode_tok_s"] if cold and cold[-1].get("decode_tok_s") else "-",
+                     mi.get("MemAvailable")), file=sys.stderr)
 
     # ---- summary ---------------------------------------------------------
     requests = [r for r in rows if r.get("kind") in ("cold", "warm", "warm-cold")]
@@ -190,6 +207,7 @@ def main():
                         / den) * 1000.0
     summary = {
         "iteration_count": iteration,
+        "aborted": aborted,
         "requests": len(requests),
         "requests_ok": len(requests) - len(errors),
         "errors": len(errors),
@@ -217,6 +235,7 @@ def main():
                             for g in (s.get("gpus") or [])
                             if g.get("power_w")), default=None),
         "duration_s": round(args.duration_min * 60.0, 1),
+        "elapsed_s": round(time.monotonic() - started, 1),
         "calibration": cal,
     }
     with open(args.summary_out, "w") as fh:
