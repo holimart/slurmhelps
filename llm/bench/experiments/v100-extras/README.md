@@ -76,17 +76,19 @@ packs staged once to node-local `/tmp`, results in
 | item | question | method |
 |:--|:--|:--|
 | **R1** | quality at **262,144** for Coder IQ1_M and Q2_0 (IQ3_S was already 6/6 + 1/1) | `niah.py --contexts 262144` unchanged: 3 positions × 2 cold repeats + tool canary, calibrated, clamped. 2× first (`--gpus 0,1`); on a launch failure the exact engine error is captured and the pack retried on 4×. |
-| **R2** | is the 155 GB/s/GPU NVLink actually used, or is the layer split confined to PCIe? | `p2p.sh` (topology/NVLink/`nvidia-smi nvlink --help`), `p2pbench.c` (driver-API `cuMemcpyPeerAsync` 256 MiB 0→1 and 0→2 vs host-staged), and `memcpy-trace.c` (LD_PRELOAD shim) on three 4× layer-split 32k cells: default, traced, and `STRATA_PEER_NO_P2P=1`. |
+| **R2** | is the 155 GB/s/GPU NVLink actually used, or is the layer split confined to PCIe? | `p2p.sh` (topology/NVLink/`nvidia-smi nvlink --help`), `p2pbench.c` (engine's own `libcudart.so.12` via dlopen: `cudaMemcpyPeerAsync` 256 MiB 0→1 and 0→2 vs `cudaMemcpyAsync(Default)` vs host-staged), NVLink `-gt d` throughput counters around each cell, and `memcpy-trace.c` (LD_PRELOAD shim) on three 4× layer-split 32k cells: default, traced, and `STRATA_PEER_NO_P2P=1`. |
 | **R3** | do the 262k HTTP 400 probe-window rejections disappear with the calibrated/clamped probe? | `stability.py` 45 min at C1, alternating a unique-salt cold 262k turn with a byte-identical warm turn, one JSON line per request (TTFT, tokens, reused, exact error), power + RAM per iteration. |
 
 New scripts:
 
 ```text
-p2pbench.c         driver API (dlopen libcuda) peer/HBM/PCIe bandwidth bench;
-                   gcc only — the node's nvcc is CUDA 13.4 and emits no sm_70
+p2pbench.c         runtime API (dlopen of the engine's libcudart.so.12) peer/
+                   HBM/PCIe bandwidth bench; gcc only — the node's nvcc is
+                   CUDA 13.4 and emits no sm_70
 memcpy-trace.c     LD_PRELOAD shim for cudaMemcpy{,Async,Peer,PeerAsync} and
                    peer-access calls; one TSV row per call (transport evidence)
 trace-summary.py   aggregates the TSV by (function, kind) inside a time window
+nvlink-delta.py    per-GPU NVLink data-payload delta from `nvidia-smi nvlink -gt d`
 stability.py       R3 calibrated cold/warm 262k loop, per-request errors/drift
 run-remaining.sh   the R1–R3 orchestrator (this is what sbatch runs)
 ```

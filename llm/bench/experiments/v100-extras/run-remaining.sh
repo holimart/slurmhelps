@@ -139,6 +139,21 @@ r2_cell() { # outdir ctx
   log "R2 cell $(basename "$out") done (window $(( (t1-t0)/1000000 )) ms)"
 }
 
+# Same cell, bracketed by the NVLink data-payload counters.  `-gt d` exists on
+# this driver (documented in r2-hardware/nvlink-cli.txt); -r resets the
+# counters when supported, so before/after brackets the cell either way.
+r2_cell_nvlink() { # outdir ctx
+  local out=$1 ctx=$2
+  nvidia-smi nvlink -r > "$out/nvlink-reset.txt" 2>&1 || true
+  nvidia-smi nvlink -gt d > "$out/nvlink-before.txt" 2>&1 || true
+  r2_cell "$out" "$ctx"
+  nvidia-smi nvlink -gt d > "$out/nvlink-after.txt" 2>&1 || true
+  python3 "$EXTRAS/nvlink-delta.py" "$out/nvlink-before.txt" \
+    "$out/nvlink-after.txt" --json "$out/nvlink-delta.json" \
+    > "$out/nvlink-delta.txt" 2>&1 || true
+  log "R2 NVLink delta $(basename "$out"): $(tr '\n' ' ' < "$out/nvlink-delta.txt")"
+}
+
 # ============================ R2a: hardware ================================
 phase "R2a hardware topology / NVLink / peer bandwidth"
 mkdir -p "$RUN/r2-hardware"
@@ -156,10 +171,12 @@ bash "$EXTRAS/p2p.sh" "$RUN/r2-hardware" 2>&1 | tee -a "$LOG"
 } > "$RUN/r2-hardware/nvlink-cli.txt" 2>&1
 
 if gcc -O2 -o "$RUN/bin/p2pbench" "$EXTRAS/p2pbench.c" -ldl >"$RUN/r2-hardware/build-p2pbench.log" 2>&1; then
-  "$RUN/bin/p2pbench" --mib 256 --iters 20 \
+  CUDART=$(ls -1 /work/ffa/holecem/strata-engine/components/engine/*/libcudart.so.12 2>/dev/null | head -1)
+  "$RUN/bin/p2pbench" --mib 256 --iters 20 --cudart "$CUDART" \
     --json "$RUN/r2-hardware/p2p-bench.json" \
     > "$RUN/r2-hardware/p2p-bench.txt" 2>&1
-  log "R2a peer bandwidth: $(tr '\n' ' ' < "$RUN/r2-hardware/p2p-bench.txt" | sed 's/  */ /g')"
+  log "R2a peer bandwidth (rc=$?): $(tr '\n' ' ' < "$RUN/r2-hardware/p2p-bench.txt" | sed 's/  */ /g')"
+  echo "cudart=$CUDART" > "$RUN/r2-hardware/p2p-bench-cudart.txt"
 else
   log "R2a FATAL: p2pbench did not build; see build-p2pbench.log"
 fi
@@ -175,7 +192,8 @@ publish "r2-hardware"
 
 # ============================ R1: 262k quality =============================
 run_niah_262k() { # packdir label gpus
-  local pack=$1 label=$2 gpus=$3 out="$RUN/r1-quality/$label"
+  local pack=$1 label=$2 gpus=$3
+  local out="$RUN/r1-quality/$label"
   mkdir -p "$out"
   if start_server "$pack" 262144 1 "$gpus" "$label" "$out/server"; then
     log "R1 $label: server up on $gpus; 262k needle 3x2 + tool canary"
@@ -254,7 +272,7 @@ if need 25 "R2b engine layer-split transport"; then
 
     # 1) clean baseline ----------------------------------------------------
     if start_server "$PACKS/iq3s" 32768 1 0,1,2,3 r2-default "$RUN/r2-engine/default"; then
-      r2_cell "$RUN/r2-engine/default" 32768
+      r2_cell_nvlink "$RUN/r2-engine/default" 32768
       stop_server; archive_engine "$RUN/r2-engine/default"
     else
       log "R2b default server failed"; stop_server
@@ -265,7 +283,7 @@ if need 25 "R2b engine layer-split transport"; then
       export LD_PRELOAD="$RUN/bin/memcpy-trace.so"
       export STRATA_MEMCPY_TRACE="$RUN/r2-engine/trace-default.tsv"
       if start_server "$PACKS/iq3s" 32768 1 0,1,2,3 r2-trace "$RUN/r2-engine/trace-server"; then
-        r2_cell "$RUN/r2-engine/trace-server" 32768
+        r2_cell_nvlink "$RUN/r2-engine/trace-server" 32768
         read -r c0 c1 < "$RUN/r2-engine/trace-server/cell-window.txt"
         python3 "$EXTRAS/trace-summary.py" "$STRATA_MEMCPY_TRACE" \
           --since "$c0" --until "$c1" \
@@ -281,7 +299,7 @@ if need 25 "R2b engine layer-split transport"; then
     # 3) no-P2P engine switch ---------------------------------------------
     export STRATA_PEER_NO_P2P=1
     if start_server "$PACKS/iq3s" 32768 1 0,1,2,3 r2-nop2p "$RUN/r2-engine/nop2p"; then
-      r2_cell "$RUN/r2-engine/nop2p" 32768
+      r2_cell_nvlink "$RUN/r2-engine/nop2p" 32768
       stop_server; archive_engine "$RUN/r2-engine/nop2p"
     else
       log "R2b no-P2P server failed"; stop_server
@@ -292,7 +310,7 @@ if need 25 "R2b engine layer-split transport"; then
       export LD_PRELOAD="$RUN/bin/memcpy-trace.so"
       export STRATA_MEMCPY_TRACE="$RUN/r2-engine/trace-nop2p.tsv"
       if start_server "$PACKS/iq3s" 32768 1 0,1,2,3 r2-nop2p-trace "$RUN/r2-engine/nop2p-trace-server"; then
-        r2_cell "$RUN/r2-engine/nop2p-trace-server" 32768
+        r2_cell_nvlink "$RUN/r2-engine/nop2p-trace-server" 32768
         read -r c0 c1 < "$RUN/r2-engine/nop2p-trace-server/cell-window.txt"
         python3 "$EXTRAS/trace-summary.py" "$STRATA_MEMCPY_TRACE" \
           --since "$c0" --until "$c1" \
