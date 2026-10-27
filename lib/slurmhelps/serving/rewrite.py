@@ -3,8 +3,11 @@
 Used by the gateway for Qwen3.8's memorised Alibaba OSS proxy URL: once that
 URL is in the conversation the model copies it (the "spiral"), so the gateway
 
-* scrubs every string in the request history (``messages`` / ``prompt``)
-  before the model sees it, and
+* repairs the request history before the model sees it: each tool call to a
+  denied URL is pointed at the URL the model meant (recovered from its own
+  reasoning) or, when that cannot be recovered, removed together with its
+  result (``repair_history``); remaining denied strings in the history become
+  plain words such as "(link removed)", not a URL the model could copy, and
 * rewrites the model's output (JSON or SSE stream), so the client never
   stores the URL in the first place.
 
@@ -33,11 +36,19 @@ _TRAILING_TOKEN = re.compile(TOKEN_CHARS + r"+\Z")
 # Output text fields in OpenAI-compatible chat/completion payloads.
 TEXT_FIELDS = ("content", "reasoning", "reasoning_content", "text")
 
+# What the gateway puts in place of a denied URL in model output. It comes back
+# in the next request's history, where repair_history treats it as denied too.
+BLOCKED_URL = "https://blocked.invalid/removed-url"
+
 
 class Rule:
-    def __init__(self, pattern: str, replacement: str, name: str = "") -> None:
+    """``replacement`` is used in model output; ``history`` (default: the same)
+    in the request history."""
+
+    def __init__(self, pattern: str, replacement: str, name: str = "", history: str | None = None) -> None:
         self.name = name or pattern
         self.replacement = replacement
+        self.history = replacement if history is None else history
         self.regex = re.compile(pattern, re.IGNORECASE)
 
 
@@ -46,9 +57,9 @@ def default_rules() -> list[Rule]:
     words = r"(?:alibaba|aliyun|alicdn|dashscope|routi[fz]|ossaccesskeyid)"
     return [
         Rule(r"https?://" + TOKEN_CHARS + r"*?" + words + TOKEN_CHARS + r"*",
-             "https://blocked.invalid/removed-url", "url"),
-        Rule(TOKEN_CHARS + r"*?" + words + TOKEN_CHARS + r"*", "removed-host", "host"),
-        Rule(r"LTAI[0-9A-Za-z]{12,}", "REMOVED_KEY", "key"),
+             BLOCKED_URL, "url", history="(link removed)"),
+        Rule(TOKEN_CHARS + r"*?" + words + TOKEN_CHARS + r"*", "removed-host", "host", history="(host removed)"),
+        Rule(r"LTAI[0-9A-Za-z]{12,}", "REMOVED_KEY", "key", history="(key removed)"),
     ]
 
 
@@ -65,7 +76,10 @@ def load_rules(path: str) -> list[Rule]:
         if not isinstance(item, dict) or not isinstance(item.get("pattern"), str) \
                 or not isinstance(item.get("replacement"), str):
             raise ValueError(f"{path}: each rule needs string 'pattern' and 'replacement'")
-        rules.append(Rule(item["pattern"], item["replacement"], str(item.get("name", ""))))
+        history = item.get("history")
+        if history is not None and not isinstance(history, str):
+            raise ValueError(f"{path}: 'history' must be a string")
+        rules.append(Rule(item["pattern"], item["replacement"], str(item.get("name", "")), history))
     return rules
 
 
@@ -93,10 +107,12 @@ class Rewriter:
             return text
         events: list[dict[str, str]] = []
         for rule in self.rules:
-            def repl(match: re.Match[str], rule: Rule = rule) -> str:
-                if match.group(0) != rule.replacement:
+            new = rule.history if where == "request" else rule.replacement
+
+            def repl(match: re.Match[str], rule: Rule = rule, new: str = new) -> str:
+                if match.group(0) not in (rule.replacement, rule.history):
                     events.append({"rule": rule.name, "original": match.group(0)})
-                return rule.replacement
+                return new
             text = rule.regex.sub(repl, text)
         if events:
             self._record(where, request_id, events)
@@ -127,10 +143,83 @@ class Rewriter:
     # -- requests ----------------------------------------------------------
     def scrub_request(self, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
         """Rewrite the conversation history (not tool schemas or sampling params)."""
+        if isinstance(payload.get("messages"), list):
+            payload["messages"] = self.repair_history(payload["messages"], request_id)
         for key in ("messages", "prompt", "input"):
             if key in payload:
                 payload[key] = self._walk(payload[key], "request", request_id)
         return payload
+
+    def is_denied_url(self, url: str) -> bool:
+        return url.startswith(BLOCKED_URL) or any(r.regex.search(url) for r in self.rules)
+
+    def repair_history(self, messages: list[Any], request_id: str = "") -> list[Any]:
+        """Point denied tool-call URLs at the intended URL, or drop the call.
+
+        For each assistant message, every tool call whose arguments hold a
+        denied URL is handled with ``recover_target``. A recovered call keeps
+        its id and result with the URL swapped (in the call, and wherever else
+        that exact URL appears in the history), so the model sees that it tried
+        the right page. An unrecoverable call is removed with its tool result;
+        an assistant message left with no text and no calls is removed too.
+        Returns a new list; inputs are not mutated.
+        """
+        swaps: dict[str, str] = {}
+        dropped: set[str] = set()
+        out: list[Any] = []
+        events: list[dict[str, str]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                out.append(message)
+                continue
+            if message.get("role") == "tool" and message.get("tool_call_id") in dropped:
+                continue
+            calls = message.get("tool_calls")
+            if message.get("role") != "assistant" or not isinstance(calls, list) or not calls:
+                out.append(message)
+                continue
+            prose = "\n".join(str(message.get(k) or "") for k in ("reasoning", "reasoning_content", "content"))
+            used = {u for c in calls for u in _call_urls(c) if not self.is_denied_url(u)}
+            kept, changed = [], False
+            for call in calls:
+                bad = [u for u in _call_urls(call) if self.is_denied_url(u)]
+                if not bad:
+                    kept.append(call)
+                    continue
+                changed = True
+                targets = {}
+                for u in bad:
+                    # The placeholder is shared by many calls: never reuse its swap.
+                    known = None if u.startswith(BLOCKED_URL) else swaps.get(u)
+                    targets[u] = known or recover_target(u, prose, used, self.is_denied_url)
+                if all(targets.values()):
+                    for u, t in targets.items():
+                        if not u.startswith(BLOCKED_URL):
+                            swaps[u] = t
+                        used.add(t)
+                        events.append({"rule": "swap", "original": u, "target": t})
+                    order = sorted(targets, key=len, reverse=True)
+                    kept.append(_replace_strings(call, lambda s, o=order, t=targets: _swap_all(s, o, t)))
+                else:
+                    if isinstance(call, dict) and call.get("id"):
+                        dropped.add(call["id"])
+                    events.append({"rule": "drop", "original": bad[0]})
+            if not changed:
+                out.append(message)
+                continue
+            message = {**message, "tool_calls": kept}
+            if not kept:
+                del message["tool_calls"]
+                if not str(message.get("content") or "").strip():
+                    continue  # a bare-reasoning assistant turn would only confuse the template
+            out.append(message)
+        if events:
+            self._record("request", request_id, events)
+        if swaps:
+            order = sorted(swaps, key=len, reverse=True)  # longest first: no partial swaps
+            out = _replace_strings(out, lambda s: _swap_all(s, order, swaps))
+        # Placeholders left in prose (from earlier rewritten output) become plain words.
+        return _replace_strings(out, lambda s: s.replace(BLOCKED_URL, "(link removed)") if BLOCKED_URL in s else s)
 
     # -- non-streamed responses -------------------------------------------
     def rewrite_response(self, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
@@ -216,3 +305,65 @@ class StreamRewriter:
                     choice["delta"] = delta
                 out.append({**self.template, "choices": [choice]})
         return out
+
+
+# -- history repair helpers -------------------------------------------------
+
+_URL_RE = re.compile(r"https?://" + TOKEN_CHARS + r"+")
+_EMBEDDED_RE = re.compile(r"https?://" + TOKEN_CHARS + r"+?/\d+/(https?://" + TOKEN_CHARS + r"+)")
+_ARXIV_SUFFIX_RE = re.compile(r"\.(\d{4,5})(?:v\d+)?(?:[?#]|$)")
+_ARXIV_ID_RE = re.compile(r"(?<![\d.])(\d{4}\.\d{4,5})(?:v\d+)?(?![\d])")
+_TRAILING_PUNCT = ".,;:!?"
+
+
+def _call_urls(call: Any) -> list[str]:
+    fn = call.get("function") if isinstance(call, dict) else None
+    args = fn.get("arguments") if isinstance(fn, dict) else None
+    if not isinstance(args, str):
+        return []
+    return [u.rstrip(_TRAILING_PUNCT) for u in _URL_RE.findall(args.replace("\\/", "/"))]
+
+
+def recover_target(url: str, prose: str, used: set[str], denied: Callable[[str], bool]) -> str | None:
+    """The URL the model meant when it wrote the denied ``url``, or None.
+
+    1. A clean URL embedded in it (``routified.com/0/https://arxiv.org/...``).
+    2. Its file suffix is the tail of an arXiv id the reasoning names
+       (``.../e5f7....08946?Expires=...`` with "2408.08946" in the reasoning).
+    3. The last clean URL the reasoning names that no other call in the same
+       message already uses.
+    """
+    embedded = _EMBEDDED_RE.match(url)
+    if embedded and not denied(embedded.group(1)):
+        return embedded.group(1).rstrip(_TRAILING_PUNCT)
+    path = url.split("?", 1)[0]
+    suffix = _ARXIV_SUFFIX_RE.search(path + ("?" if "?" in url else ""))
+    if suffix:
+        ids = [m for m in _ARXIV_ID_RE.findall(prose) if m.endswith("." + suffix.group(1))]
+        if ids:
+            return f"https://arxiv.org/abs/{ids[-1]}"
+    for candidate in reversed(_URL_RE.findall(prose)):
+        candidate = candidate.rstrip(_TRAILING_PUNCT)
+        if not denied(candidate) and candidate not in used:
+            return candidate
+    return None
+
+
+def _swap_all(text: str, order: list[str], swaps: dict[str, str]) -> str:
+    for old in order:
+        if old in text:
+            text = text.replace(old, swaps[old])
+        escaped = json.dumps(old)[1:-1]
+        if escaped != old and escaped in text:
+            text = text.replace(escaped, json.dumps(swaps[old])[1:-1])
+    return text
+
+
+def _replace_strings(value: Any, fn: Callable[[str], str]) -> Any:
+    if isinstance(value, str):
+        return fn(value)
+    if isinstance(value, list):
+        return [_replace_strings(v, fn) for v in value]
+    if isinstance(value, dict):
+        return {k: _replace_strings(v, fn) for k, v in value.items()}
+    return value

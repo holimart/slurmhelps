@@ -51,9 +51,11 @@ def test_scrub_request_rewrites_history_not_tools():
     }
     rw.scrub_request(payload)
     text = json.dumps(payload["messages"])
-    assert "aliyuncs" not in text and "LTAI" not in text and BLOCKED in text
+    assert "aliyuncs" not in text and "LTAI" not in text and BLOCKED not in text
+    # Nothing to recover the target from: the call and its result are dropped,
+    # the message keeps its reasoning only as plain words.
+    assert [m["role"] for m in payload["messages"]] == ["user"]
     assert payload["tools"][0]["function"]["description"] == "aliyun docs"
-    assert rw.counts["request"] == 3
 
 
 def _chat_chunks(pieces, field="content", finish=True):
@@ -189,7 +191,7 @@ def test_gateway_rewrites_json_and_scrubs_history(tmp_path):
         assert status == 200
         assert json.loads(raw)["choices"][0]["message"]["content"] == f"try {BLOCKED}"
         sent = up.bodies[0]
-        assert sent["messages"][0]["content"] == BLOCKED and sent["bad_words"] == ["LTAI5tKoG9A3DkwGD635QVZr"]
+        assert sent["messages"][0]["content"] == "(link removed)" and sent["bad_words"] == ["LTAI5tKoG9A3DkwGD635QVZr"]
         lines = [json.loads(x) for x in log.read_text().splitlines()]
         assert {x["where"] for x in lines} == {"request", "response"}
         assert gw.status()["rewrites"] == {"request": 1, "response": 1}
@@ -223,6 +225,64 @@ def test_qwen38_rules_file_matches_builtin_defaults():
     from slurmhelps.serving.rewrite import default_rules
 
     path = Path(__file__).resolve().parents[1] / "llm" / "qwen38" / "rewrite_rules.json"
-    got = [(r.name, r.regex.pattern, r.replacement) for r in load_rules(str(path))]
-    assert got == [(r.name, r.regex.pattern, r.replacement) for r in default_rules()]
-    assert all("alibaba" not in r.replacement.lower() for r in load_rules(str(path)))
+    got = [(r.name, r.regex.pattern, r.replacement, r.history) for r in load_rules(str(path))]
+    assert got == [(r.name, r.regex.pattern, r.replacement, r.history) for r in default_rules()]
+    assert all("alibaba" not in (r.replacement + r.history).lower() for r in load_rules(str(path)))
+
+
+# -- history repair -------------------------------------------------------------------
+
+def _call(cid, url):
+    return {"id": cid, "type": "function", "function": {"name": "web_fetch", "arguments": json.dumps({"url": url})}}
+
+
+def _turn(reasoning, *calls, results="response content type is not text"):
+    msgs = [{"role": "assistant", "content": "", "reasoning": reasoning, "tool_calls": list(calls)}]
+    msgs += [{"role": "tool", "tool_call_id": c["id"], "content": results} for c in calls]
+    return msgs
+
+
+def _urls(messages):
+    return [json.loads(c["function"]["arguments"])["url"] for m in messages for c in m.get("tool_calls") or []]
+
+
+def test_repair_swaps_arxiv_suffix_from_reasoning():
+    ctx = [{"role": "user", "content": "verify sources"}]
+    ctx += _turn("Batch: 2408.08946, 2503.01659. Let me go.", _call("a", URL))
+    ctx += [{"role": "assistant", "content": f"I fetched {URL}"}]
+    rw = Rewriter()
+    out = rw.scrub_request({"messages": ctx})["messages"]
+    assert _urls(out) == ["https://arxiv.org/abs/2408.08946"]
+    assert out[2]["role"] == "tool" and out[2]["tool_call_id"] == "a"
+    assert out[3]["content"] == "I fetched https://arxiv.org/abs/2408.08946"
+    assert "aliyuncs" not in json.dumps(out) and ctx[1]["tool_calls"][0]["function"]["arguments"] != out[1]["tool_calls"][0]["function"]["arguments"]
+
+
+def test_repair_uses_embedded_url_and_last_named_url():
+    embedded = "https://routified.com/0/https://www.kaggle.com/c/x/discussion/1"
+    other = URL.replace(".08946", "")
+    ctx = _turn("Next: fetch https://hearmyship.fer.hr/ for the licence.", _call("a", embedded), _call("b", other))
+    out = Rewriter().scrub_request({"messages": ctx})["messages"]
+    assert _urls(out) == ["https://www.kaggle.com/c/x/discussion/1", "https://hearmyship.fer.hr/"]
+
+
+def test_repair_drops_unrecoverable_calls_and_their_results():
+    ctx = [{"role": "user", "content": "go"}]
+    ctx += _turn("no targets named here", _call("a", URL.replace(".08946", "")), _call("b", "https://arxiv.org/abs/1"))
+    ctx += [{"role": "user", "content": "next"}]
+    out = Rewriter().scrub_request({"messages": ctx})["messages"]
+    assert [m["role"] for m in out] == ["user", "assistant", "tool", "user"]
+    assert _urls(out) == ["https://arxiv.org/abs/1"] and out[2]["tool_call_id"] == "b"
+
+
+def test_repair_handles_placeholders_from_earlier_output_one_by_one():
+    ctx = _turn("fetch https://arxiv.org/abs/2308.07305 then", _call("a", BLOCKED)) + _turn("now https://arxiv.org/abs/2309.07755", _call("b", BLOCKED))
+    ctx += [{"role": "assistant", "content": f"tried {BLOCKED}"}]
+    out = Rewriter().scrub_request({"messages": ctx})["messages"]
+    assert _urls(out) == ["https://arxiv.org/abs/2308.07305", "https://arxiv.org/abs/2309.07755"]
+    assert out[-1]["content"] == "tried (link removed)"
+
+
+def test_repair_leaves_clean_history_untouched():
+    ctx = [{"role": "user", "content": "hi"}] + _turn("fetch", _call("a", "https://arxiv.org/abs/1"))
+    assert Rewriter().scrub_request({"messages": json.loads(json.dumps(ctx))})["messages"] == ctx
