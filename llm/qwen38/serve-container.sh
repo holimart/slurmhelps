@@ -22,6 +22,17 @@ MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-8192}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.90}
 KV_DTYPE=${KV_DTYPE:-fp8}
 MTP=${MTP:-1}
+# Gateway in front of vLLM on the node: merges bad_words.json into every
+# completion request. QWEN38_GATEWAY=0 serves bare vLLM on $PORT as before.
+GATEWAY=${QWEN38_GATEWAY:-1}
+BAD_WORDS_FILE=${QWEN38_BAD_WORDS:-$HELPER/bad_words.json}
+if [ "$GATEWAY" = 1 ]; then
+  VLLM_HOST=127.0.0.1
+  VLLM_PORT=${QWEN38_VLLM_PORT:-$((PORT + 1))}
+else
+  VLLM_HOST=0.0.0.0
+  VLLM_PORT=$PORT
+fi
 # Persistent JIT/autotune/cache root. Changing the image or model revision
 # should use a new QWEN38_CACHE_KEY so stale kernels are not reused.
 CACHE_KEY=${QWEN38_CACHE_KEY:-qwen38-vllm-release-10152026}
@@ -104,7 +115,7 @@ CMD=(apptainer exec --nv
   --env HF_HUB_OFFLINE=1
   --env VLLM_PLE_CPU_OFFLOAD=1
   "$SIF" vllm serve "$MODEL"
-  --host 0.0.0.0 --port "$PORT"
+  --host "$VLLM_HOST" --port "$VLLM_PORT"
   --served-model-name "$SERVED"
   --tensor-parallel-size "$TP"
   --pipeline-parallel-size 1
@@ -146,4 +157,10 @@ printf '[qwen38-container] sif=%s model=%s tp=%s port=%s gpu_mem=%s\n' \
   "$SIF" "$MODEL" "$TP" "$PORT" "$GPU_MEM_UTIL"
 printf '[qwen38-container] persistent_cache=%s\n' "$CACHE_ROOT"
 printf '[qwen38-container] command:'; printf ' %q' "${CMD[@]}"; printf '\n'
+if [ "$GATEWAY" = 1 ]; then
+  [ -f "$BAD_WORDS_FILE" ] || { echo "qwen38 container: missing $BAD_WORDS_FILE" >&2; exit 2; }
+  exec "$ROOT/bin/serve_with_gateway.sh" --config "$HELPER/config-bw.json" \
+    --port "$PORT" --upstream-port "$VLLM_PORT" --bad-words-file "$BAD_WORDS_FILE" \
+    -- "${CMD[@]}"
+fi
 exec "${CMD[@]}"

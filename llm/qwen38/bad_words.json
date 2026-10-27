@@ -1,0 +1,9 @@
+{
+  "_comment": "Memorised Alibaba OSS AccessKey IDs (Qwen3.8 routify habit). Key-only on purpose: wider bans push the model to unblocked look-alike hosts; see experiments/2026-10-27-bad-words-ban.md. The '=' forms match the in-URL tokenization (=L|TA|I|5|t...).",
+  "bad_words": [
+    "LTAI5tKoG9A3DkwGD635QVZr",
+    "=LTAI5tKoG9A3DkwGD635QVZr",
+    "LTAI5tA4qZ9rEj6S26c4vMqE",
+    "=LTAI5tA4qZ9rEj6S26c4vMqE"
+  ]
+}

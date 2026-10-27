@@ -17,6 +17,12 @@ Inside a URL, `.aliyuncs` or `=LTAI5t…` tokenize differently, so the full temp
 the model spells around the ban: `routified.com`, `routIFY.ai`, `aliyuncsl.com`, S3 / googleapis /
 trycloudflare / duckdns look-alikes. Those hosts are not on the langywrap sandbox denylist.
 
-Decision: the gateway supports `--bad-word` / `--bad-words-file`, but it is **not** enabled for
-qwen38. A ban moves part of the traffic from a blocked host to unblocked ones. The habit needs a
-weight-level fix (see the llmtuning project).
+Key-only ban (`LTAI5tKoG9A3DkwGD635QVZr`, `LTAI5tA4qZ9rEj6S26c4vMqE` and their `=` forms): 26/48
+still emit the Alibaba URL (no change), but the key comes out as `…QVZ` / `…QVZc`: the exact
+memorised credential is never sent and no traffic moves to new hosts.
+
+Decision: qwen38 runs vLLM behind the gateway on the node (`bin/serve_with_gateway.sh`, vLLM on
+127.0.0.1:PORT+1) with the **key-only** list in `llm/qwen38/bad_words.json`. Wider word bans stay
+off because they push part of the traffic from a blocked host to unblocked ones. The sandbox
+denylist (langywrap 3a7e4891: `routi[fz]`, `ltai5t`, `ossaccesskeyid`) blocks the rest; the habit
+itself needs a weight-level fix (see the llmtuning project). `QWEN38_GATEWAY=0` restores bare vLLM.
