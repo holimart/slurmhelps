@@ -28,7 +28,7 @@ from typing import Any
 
 from .config import ServingConfig
 from .controller import Controller
-from .gateway import GatewayServer
+from .gateway import GatewayServer, load_bad_words
 from .mock import MockOpenAIServer
 from .spill import SpillManager
 from .state import StateStore
@@ -362,13 +362,19 @@ def cmd_gateway(args: argparse.Namespace) -> int:
             print("no node: service is not running", file=sys.stderr)
             return 3
         upstream = f"http://{node}:{cfg.port}/v1"
+    bad_words = list(args.bad_word or [])
+    if args.bad_words_file:
+        bad_words += load_bad_words(args.bad_words_file)
+    max_active = None if args.max_active < 0 else (args.max_active or cfg.max_num_seqs)
     gateway = GatewayServer(
         upstream=upstream,
         host=args.listen_host,
         port=args.listen_port,
         key_env=args.key_env or cfg.key_env,
-        max_active=args.max_active or cfg.max_num_seqs,
+        max_active=max_active,
         coalesce_ms=args.coalesce_ms if args.coalesce_ms is not None else cfg.coalesce_ms,
+        timeout=args.timeout,
+        bad_words=bad_words,
     ).start()
     print(gateway.base_url, flush=True)
     try:
@@ -496,8 +502,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--listen-host", default="127.0.0.1")
     p.add_argument("--listen-port", type=int, default=18001)
     p.add_argument("--key-env", default="")
-    p.add_argument("--max-active", type=int, default=0)
+    p.add_argument("--max-active", type=int, default=0,
+                   help="0 = config max_num_seqs, -1 = no limit")
     p.add_argument("--coalesce-ms", type=float, default=None)
+    p.add_argument("--timeout", type=float, default=600.0,
+                   help="upstream socket timeout in seconds")
+    p.add_argument("--bad-word", action="append", default=[],
+                   help="string the model may not emit (repeatable)")
+    p.add_argument("--bad-words-file", default="",
+                   help="JSON list of banned strings merged into every completion request")
     p.set_defaults(func=cmd_gateway)
 
     p = sub.add_parser("smoke", help="run the HTTP smoke matrix")

@@ -294,3 +294,83 @@ def test_gateway_stop_is_idempotent_and_base_url_uses_ephemeral_port():
     assert gateway.base_url.startswith("http://127.0.0.1:")
     gateway.stop()
     gateway.stop()
+
+
+class _CaptureUpstream:
+    """Tiny upstream that records request bodies and answers {}."""
+
+    def __init__(self) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        import threading
+
+        bodies: list[bytes] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_a):
+                return
+
+            def do_POST(self):  # noqa: N802
+                n = int(self.headers.get("Content-Length") or 0)
+                bodies.append(self.rfile.read(n))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+        self.bodies = bodies
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.base = f"http://127.0.0.1:{self.httpd.server_address[1]}/v1"
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+def test_bad_words_are_merged_into_completion_requests(gateway_factory):
+    up = _CaptureUpstream()
+    try:
+        gw = gateway_factory(upstream=up.base, bad_words=["aliyuncs", "routify", "aliyuncs", ""])
+        status, _, _ = request(gw.base_url, "POST", "/v1/chat/completions",
+                               {"model": "m", "messages": [], "bad_words": ["mine", "routify"]})
+        assert status == 200
+        status, _, _ = request(gw.base_url, "POST", "/v1/completions", {"model": "m", "prompt": "x"})
+        assert status == 200
+        status, _, _ = request(gw.base_url, "POST", "/v1/embeddings", {"model": "m", "input": "x"})
+        assert status == 200
+        sent = [json.loads(b) for b in up.bodies]
+        assert sent[0]["bad_words"] == ["mine", "routify", "aliyuncs"]
+        assert sent[1]["bad_words"] == ["aliyuncs", "routify"]
+        assert "bad_words" not in sent[2]
+        status, _, raw = request(gw.base_url, "GET", "/status")
+        assert json_body(raw)["bad_words"] == 2
+        assert json_body(raw)["bad_words_injected"] == 2
+    finally:
+        up.stop()
+
+
+def test_bad_words_leave_non_json_bodies_alone(gateway_factory):
+    up = _CaptureUpstream()
+    try:
+        gw = gateway_factory(upstream=up.base, bad_words=["x"])
+        split = urlsplit(gw.base_url)
+        conn = http.client.HTTPConnection(split.hostname, split.port, timeout=10)
+        conn.request("POST", "/v1/completions", body=b"not json",
+                     headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 200
+        conn.close()
+        assert up.bodies == [b"not json"]
+    finally:
+        up.stop()
+
+
+def test_load_bad_words_accepts_list_or_object(tmp_path):
+    from slurmhelps.serving.gateway import load_bad_words
+
+    a = tmp_path / "a.json"
+    a.write_text('["aliyuncs", "aliyuncs", 3, "routify"]')
+    b = tmp_path / "b.json"
+    b.write_text('{"bad_words": ["LTAI5t"]}')
+    assert load_bad_words(str(a)) == ["aliyuncs", "routify"]
+    assert load_bad_words(str(b)) == ["LTAI5t"]

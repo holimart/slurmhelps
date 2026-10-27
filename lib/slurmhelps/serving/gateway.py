@@ -12,7 +12,12 @@ Local endpoints (never authenticated, never proxied)::
     GET /health   gateway liveness
     GET /status   gateway counters + active/queue depth + request id
 
-Everything else, including ``GET /metrics``, is proxied. If a key is
+Everything else, including ``GET /metrics``, is proxied.
+
+Banned words: when ``bad_words`` is set, every JSON ``POST`` to a
+``/completions`` or ``/chat/completions`` path gets those strings merged into
+its vLLM ``bad_words`` sampling field, so the model cannot emit them whatever
+the client sends. Used for Qwen3.8's memorised Alibaba OSS proxy URL. If a key is
 configured (``api_key`` or the environment variable named by ``key_env``), a
 valid ``Authorization: Bearer <key>`` is required; the header is never logged.
 """
@@ -64,6 +69,7 @@ class GatewayServer:
         coalesce_ms: float = 0.0,
         timeout: float = 600.0,
         name: str = "slurmhelps-gateway",
+        bad_words: list[str] | None = None,
     ) -> None:
         base = upstream or upstream_base or upstream_url
         if not base:
@@ -92,6 +98,9 @@ class GatewayServer:
 
         limit = max_active if max_active is not None else max_queue
         self.max_active = int(limit) if limit is not None else None
+
+        self.bad_words = _clean_words(bad_words)
+        self._injected = 0
 
         self._lock = threading.Lock()
         self._start_lock = threading.Lock()
@@ -195,6 +204,8 @@ class GatewayServer:
                 "uptime_s": round(time.monotonic() - self._started_at, 3),
                 "auth": "bearer" if self.api_key else "none",
                 "coalesce_ms": self.coalesce_ms,
+                "bad_words": len(self.bad_words),
+                "bad_words_injected": self._injected,
             }
 
     # -- proxy helpers -----------------------------------------------------
@@ -210,6 +221,31 @@ class GatewayServer:
             target += "?" + split.query
         return target
 
+    def inject_bad_words(self, method: str, raw_path: str, body: bytes) -> bytes:
+        """Merge the banned words into a completion request body.
+
+        Bodies that are not a JSON object are passed through unchanged; the
+        upstream rejects them anyway.
+        """
+        if not self.bad_words or method != "POST" or not body:
+            return body
+        path = urlsplit(raw_path).path.rstrip("/")
+        if not path.endswith("/completions"):
+            return body
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            return body
+        if not isinstance(payload, dict):
+            return body
+        existing = payload.get("bad_words")
+        merged = _clean_words(existing if isinstance(existing, list) else [])
+        merged += [word for word in self.bad_words if word not in merged]
+        payload["bad_words"] = merged
+        with self._lock:
+            self._injected += 1
+        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
     def authorized(self, authorization: str | None) -> bool:
         if not self.api_key:
             return True
@@ -222,6 +258,25 @@ class GatewayServer:
         return hmac.compare_digest(
             token.strip().encode("utf-8"), self.api_key.encode("utf-8")
         )
+
+
+def _clean_words(words: Any) -> list[str]:
+    out: list[str] = []
+    for word in words or []:
+        if isinstance(word, str) and word.strip() and word not in out:
+            out.append(word)
+    return out
+
+
+def load_bad_words(path: str) -> list[str]:
+    """Read banned words from a JSON list or a ``{"bad_words": [...]}`` object."""
+    with open(path, encoding="utf-8") as stream:
+        data = json.load(stream)
+    if isinstance(data, dict):
+        data = data.get("bad_words", [])
+    if not isinstance(data, list):
+        raise ValueError(f"{path}: expected a list of strings")
+    return _clean_words(data)
 
 
 class _GatewayHandler(BaseHTTPRequestHandler):
@@ -314,7 +369,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            body = self._read_body()
+            body = gateway.inject_bad_words(self.command, self.path, self._read_body())
             if gateway.coalesce_ms:
                 # Optional, deliberately small batching window.  Default is 0:
                 # a multi-second wait is terrible for a single interactive
