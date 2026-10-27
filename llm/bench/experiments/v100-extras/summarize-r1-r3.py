@@ -69,8 +69,8 @@ def r1(root):
 
 def r2_cells(root):
     out = []
-    for path in sorted(glob.glob(os.path.join(root, "r2-engine", "*", "cells.jsonl"))):
-        label = os.path.basename(os.path.dirname(path))
+    for path in sorted(glob.glob(os.path.join(root, "r2-engine*", "*", "cells.jsonl"))):
+        label = os.path.relpath(os.path.dirname(path), root)
         for r in rows(path):
             out.append({
                 "run": label, "ctx": r.get("context"),
@@ -142,8 +142,8 @@ def main():
             data["r2_hardware"] = json.load(open(path))
         except OSError:
             pass
-    for path in sorted(glob.glob(os.path.join(args.results, "r2-engine", "trace-*-summary.json"))):
-        data["r2_trace"][os.path.basename(path).replace("-summary.json", "")] = \
+    for path in sorted(glob.glob(os.path.join(args.results, "r2-engine*", "*trace*summary*.json"))):
+        data["r2_trace"][os.path.relpath(path, args.results)] = \
             json.load(open(path))
 
     print("## R1 — 262,144 quality\n")
@@ -172,14 +172,14 @@ def main():
 
     print("\n## R2 — copy trace inside the 32k cell window\n")
     for name, t in data["r2_trace"].items():
-        print("- **%s**: %.1f MB copied, peer share %s, d2d %.1f MB, host %.1f MB, default %.1f MB"
+        print("- **%s**: %.1f MB copied, cross-device %.1f MB, peer-API %.1f MB"
               % (name, t.get("total_bytes", 0) / 1e6,
-                 fmt((t.get("peer_share") or 0) * 100, 1) + " %",
-                 (t.get("by_transport") or {}).get("d2d", 0) / 1e6,
-                 (t.get("by_transport") or {}).get("host", 0) / 1e6,
-                 (t.get("by_transport") or {}).get("default", 0) / 1e6))
+                 t.get("cross_device_bytes", 0) / 1e6,
+                 t.get("peer_api_bytes", 0) / 1e6))
         for call, v in sorted((t.get("by_call") or {}).items()):
-            print("  - `%s`: %d calls, %.1f MB" % (call, v["calls"], v["bytes"] / 1e6))
+            print("  - `%s`: %d calls, %.1f MB, cross %.1f MB"
+                  % (call, v.get("calls", 0), v.get("bytes", 0) / 1e6,
+                     v.get("cross_bytes", 0) / 1e6))
 
     print("\n## R3 — 262k stability\n")
     d = data["r3"]
