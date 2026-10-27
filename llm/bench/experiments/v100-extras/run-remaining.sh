@@ -7,7 +7,7 @@
 #SBATCH --mem=340G
 #SBATCH --time=05:00:00
 #SBATCH --nice=100
-#SBATCH --output=/tmp/strata-v100-rem-%j.out
+#SBATCH --output=/work/ffa/holecem/logs/strata-v100-rem-%j.out
 #
 # 2026-10-28 remaining V100 experiments (R1-R3), one allocation on volta05.
 #
@@ -27,6 +27,12 @@
 # every log, engine log, pack and intermediate file lives under /tmp; only
 # small JSONL/CSV/JSON/TXT summaries are copied to the results tree after a
 # phase or at the end.  This runner never reads a live file on /work.
+#
+# The one exception is the Slurm stdout capture below: /tmp on volta05 is a
+# persistent 206 GB filesystem shared across jobs, and an earlier allocation
+# (38249052) left it 100 % full, so Slurm cannot reliably create a node-local
+# output file at job start.  The capture is tiny and never read while the job
+# runs; the script re-execs its own stdout to /tmp right after cleaning up.
 #
 # Results: /work/ffa/holecem/strata-runs/2026-10-28-v100-remaining/
 set -uo pipefail
@@ -51,13 +57,37 @@ Q2S1=Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf
 Q2S2=Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf
 SH2=Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 
+# /tmp on volta05 persists between jobs.  A previous attempt can leave the
+# whole 206 GB full (job 38249052 did, and ENOSPC then killed every launch).
+# Remove only our own stale trees before creating anything.
+for d in /tmp/v100-rem-*; do
+  [ -d "$d" ] || continue
+  [ "$d" = "$RUN" ] && continue
+  [ -O "$d" ] || continue
+  rm -rf "$d" && echo "[v100-rem] removed stale $d"
+done
+
 mkdir -p "$PACKS"/{iq3s,coder,q2_0,_shared} "$RUN/bin" "$RUN/logs" "$OUT"
 START=$(date +%s)
 DEADLINE=$((START + 4*3600 + 20*60))   # 5 h allocation, 40 min of slack
 
+# After this point the real log is node-local; the Slurm capture only keeps
+# the cleanup lines above (it exists on Lustre so a full /tmp cannot stop the
+# job from starting).
+exec >>"$RUN/stdout.log" 2>&1
+
 log() { printf '[v100-rem] %s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 now() { date +%s; }
 remaining_min() { echo $(( (DEADLINE - $(now)) / 60 )); }
+free_gb() { df -Pk /tmp | awk 'NR==2{printf "%d", $4/1048576}'; }
+ensure_tmp_space() { # need_gb what
+  local g; g=$(free_gb)
+  if [ "$g" -lt "$1" ]; then
+    log "FATAL: only ${g} GiB free on /tmp, need $1 for $2"
+    return 1
+  fi
+  return 0
+}
 need() { # min item
   local r; r=$(remaining_min)
   [ "$r" -ge "$1" ] || { log "SKIP (only ${r} min left, need $1): $2";
@@ -94,11 +124,12 @@ record() { # phase note
 }
 
 # ---- staging (once; all packs in parallel, node-local /tmp) ----------------
-declare -A STAGE_PID=() STAGE_T0=() STAGE_DONE=()
+declare -A STAGE_PID=() STAGE_T0=() STAGE_DONE=() STAGE_DST=()
 start_stage() { # name src dst
   STAGE_T0[$1]=$(now)
+  STAGE_DST[$1]=$3
   cp "$2" "$3" & STAGE_PID[$1]=$!
-  log "staging $1 -> $3 (pid ${STAGE_PID[$1]})"
+  log "staging $1 -> $3 (pid ${STAGE_PID[$1]}, $(free_gb) GiB free)"
 }
 finish_stage() { # name
   local name=$1 pid=${STAGE_PID[$1]:-}
@@ -106,10 +137,10 @@ finish_stage() { # name
   [ -n "$pid" ] || { log "FATAL: no staging job for $name"; return 1; }
   if wait "$pid"; then
     STAGE_DONE[$1]=1
-    log "staged $name in $(( $(now) - STAGE_T0[$1] ))s"
+    log "staged $name in $(( $(now) - STAGE_T0[$1] ))s ($(du -h "$STAGE_DST[$1]" 2>/dev/null | cut -f1))"
     return 0
   fi
-  log "FATAL: staging $name failed"
+  log "FATAL: staging $name failed (disk full? $(free_gb) GiB free)"
   return 1
 }
 link_shared() { # packdir shard2name
@@ -118,9 +149,18 @@ link_shared() { # packdir shard2name
 }
 
 start_stage ple "$MODELS/iq3s/$I3S2" "$PACKS/_shared/$SH2"
-start_stage iq3s "$MODELS/iq3s/$I3S1" "$PACKS/iq3s/$I3S1"
 start_stage coder "$MODELS/coder/$COS1" "$PACKS/coder/$COS1"
 start_stage q2_0 "$MODELS/q2_0/$Q2S1" "$PACKS/q2_0/$Q2S1"
+
+# IQ3_S is 54.8 GB and only needed for R2b/R3.  Starting it after the coder
+# pack is deleted keeps peak /tmp use at ~126 GB instead of ~151 GB (the
+# 206 GB filesystem is shared with whatever an earlier job left behind).
+IQ3S_STARTED=0
+start_iq3s() {
+  [ "$IQ3S_STARTED" = 1 ] && return 0
+  IQ3S_STARTED=1
+  start_stage iq3s "$MODELS/iq3s/$I3S1" "$PACKS/iq3s/$I3S1"
+}
 
 # ---- helpers ---------------------------------------------------------------
 probe_cell() { # outjson ctx c max_tokens rps
@@ -218,7 +258,8 @@ run_niah_262k() { # packdir label gpus
   stop_server
   if [ "$gpus" != "0,1,2,3" ]; then
     log "R1 $label: retrying on 4x V100"
-    if start_server "$pack" 262144 1 "0,1,2,3" "$label-4x" "$out/server-4x"; then
+    if ensure_tmp_space 6 "R1 $label 4x retry" && \
+       start_server "$pack" 262144 1 "0,1,2,3" "$label-4x" "$out/server-4x"; then
       python3 "$EXTRAS/niah.py" \
         --base-url "$(server_base)" --model "$SERVER_MODEL" \
         --contexts 262144 --positions 10,50,90 --repeats 2 \
@@ -240,7 +281,8 @@ if need 35 "R1 Coder IQ1_M 262k"; then
   if finish_stage coder && finish_stage ple && link_shared "$PACKS/coder" "$COS2"; then
     phase "R1 Coder IQ1_M at 262,144 (2x first)"
     t0=$(now)
-    run_niah_262k "$PACKS/coder" coder-262k "0,1" || log "R1 Coder ended with a recorded failure"
+    ensure_tmp_space 6 "R1 Coder server" && \
+      run_niah_262k "$PACKS/coder" coder-262k "0,1" || log "R1 Coder ended with a recorded failure"
     record "R1-coder-262k" "" "" "$(( $(now) - t0 ))" "2x-then-4x"
     publish "r1-quality/coder-262k"
     phase_done "R1 Coder"
@@ -248,13 +290,17 @@ if need 35 "R1 Coder IQ1_M 262k"; then
     log "SKIP R1 Coder (staging failed)"
     printf 'R1 Coder 262k\tstaging-failed\n' >> "$OUT/skipped.tsv"
   fi
+  # Free 29.6 GB before IQ3_S is staged; R1 Q2_0 keeps running meanwhile.
+  rm -f "$PACKS/coder/$COS1"
+  start_iq3s
 fi
 
 if need 30 "R1 Q2_0 262k"; then
   if finish_stage q2_0 && finish_stage ple && link_shared "$PACKS/q2_0" "$Q2S2"; then
     phase "R1 Q2_0 at 262,144 (2x first)"
     t0=$(now)
-    run_niah_262k "$PACKS/q2_0" q2_0-262k "0,1" || log "R1 Q2_0 ended with a recorded failure"
+    ensure_tmp_space 6 "R1 Q2_0 server" && \
+      run_niah_262k "$PACKS/q2_0" q2_0-262k "0,1" || log "R1 Q2_0 ended with a recorded failure"
     record "R1-q2_0-262k" "" "" "$(( $(now) - t0 ))" "2x-then-4x"
     publish "r1-quality/q2_0-262k"
     phase_done "R1 Q2_0"
@@ -262,11 +308,15 @@ if need 30 "R1 Q2_0 262k"; then
     log "SKIP R1 Q2_0 (staging failed)"
     printf 'R1 Q2_0 262k\tstaging-failed\n' >> "$OUT/skipped.tsv"
   fi
+  # Q2_0 is not needed again; reclaim 37.6 GB for the R2/R3 servers.
+  rm -f "$PACKS/q2_0/$Q2S1"
 fi
 
 # ============================ R2b: engine transport ========================
 if need 25 "R2b engine layer-split transport"; then
-  if finish_stage iq3s && finish_stage ple && link_shared "$PACKS/iq3s" "$I3S2"; then
+  start_iq3s
+  if finish_stage iq3s && finish_stage ple && link_shared "$PACKS/iq3s" "$I3S2" \
+     && ensure_tmp_space 4 "R2b servers"; then
     phase "R2b 4x layer-split transport (32k cell, 3 runs)"
     mkdir -p "$RUN/r2-engine"
 
@@ -335,7 +385,8 @@ fi
 if need 60 "R3 262k stability"; then
   mkdir -p "$RUN/r3-stability"
   phase "R3 45 min 262k stability (cold + warm, C1)"
-  if start_server "$PACKS/iq3s" 262144 4 0,1,2,3 r3 "$RUN/r3-stability/server"; then
+  if ensure_tmp_space 4 "R3 server" && \
+     start_server "$PACKS/iq3s" 262144 4 0,1,2,3 r3 "$RUN/r3-stability/server"; then
     bash "$EXTRAS/power-sampler.sh" "$RUN/r3-stability/power.csv" & samp=$!
     python3 "$EXTRAS/stability.py" \
       --base-url "$(server_base)" --model "$SERVER_MODEL" \
@@ -361,5 +412,6 @@ record "session-total" "$(date -u +%FT%TZ)" "" "$TOTAL" "minutes=$(($TOTAL/60))"
 df -h /tmp | tail -1 | tee -a "$LOG"
 publish "."
 cp "$LOG" "$OUT/session.log" 2>/dev/null || true
-cp "/tmp/strata-v100-rem-$JOB.out" "$OUT/slurm-$JOB.out" 2>/dev/null || true
+cp "$RUN/stdout.log" "$OUT/stdout.log" 2>/dev/null || true
+cp "/work/ffa/holecem/logs/strata-v100-rem-$JOB.out" "$OUT/slurm-$JOB.out" 2>/dev/null || true
 echo "[v100-rem] done"

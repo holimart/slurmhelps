@@ -163,6 +163,10 @@ archive_engine() { # outdir
 stop_server() {
   "$STRATA_ROOT/bin/strata" launch --stop --no-tui --yes >/dev/null 2>&1 || true
   [ -n "$SERVER_DATA" ] && pkill -f "$SERVER_DATA/mtp" 2>/dev/null || true
+  # The seeded private data dir is a per-phase copy (~1-2 GB).  /tmp on
+  # volta05 is a shared 206 GB filesystem, so reclaim it as soon as the
+  # server is gone; the next phase re-seeds its own.
+  [ -n "$SERVER_DATA" ] && rm -rf "$SERVER_DATA" 2>/dev/null || true
   SERVER_PORT=""
 }
 
