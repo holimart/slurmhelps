@@ -369,7 +369,9 @@ def cmd_gateway(args: argparse.Namespace) -> int:
     rewriter = None
     if args.rewrite_rules:
         rules = default_rules() if args.rewrite_rules == "default" else load_rules(args.rewrite_rules)
-        rewriter = Rewriter(rules, log_path=args.rewrite_log or None)
+        rewriter = Rewriter(rules, log_path=args.rewrite_log or None, history_mode=args.history_mode,
+                            shellguard=not args.no_shellguard,
+                            privguard=not args.no_privilege_guard, allow_hosts=args.allow_host or ())
     max_active = None if args.max_active < 0 else (args.max_active or cfg.max_num_seqs)
     gateway = GatewayServer(
         upstream=upstream,
@@ -520,6 +522,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rewrite-rules", default="",
                    help="'default' or a JSON rules file: scrub history and rewrite output")
     p.add_argument("--rewrite-log", default="", help="JSONL log of every rewrite (original text)")
+    p.add_argument("--history-mode", choices=("drop", "swap"), default="drop",
+                   help="denied tool-call URLs in the history: drop the call and result, or swap to the intended URL")
+    p.add_argument("--no-shellguard", action="store_true",
+                   help="do not remove off-task uploads and metadata requests from command tool calls")
+    p.add_argument("--no-privilege-guard", action="store_true",
+                   help="do not replace privilege workarounds in command tool calls with a sandbox notice")
+    p.add_argument("--allow-host", action="append", default=[],
+                   help="host that command tool calls may upload to (repeatable; subdomains match)")
     p.set_defaults(func=cmd_gateway)
 
     p = sub.add_parser("smoke", help="run the HTTP smoke matrix")

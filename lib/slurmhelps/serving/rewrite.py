@@ -4,22 +4,34 @@ Used by the gateway for Qwen3.8's memorised Alibaba OSS proxy URL: once that
 URL is in the conversation the model copies it (the "spiral"), so the gateway
 
 * repairs the request history before the model sees it: each tool call to a
-  denied URL is pointed at the URL the model meant (recovered from its own
-  reasoning) or, when that cannot be recovered, removed together with its
-  result (``repair_history``); remaining denied strings in the history become
-  plain words such as "(link removed)", not a URL the model could copy, and
+  denied URL is removed together with its result (``repair_history``,
+  ``history_mode="drop"``; ``"swap"`` instead points it at the URL the model
+  meant, recovered from its reasoning); remaining denied strings in the
+  history become plain words such as "(link removed)", not a URL the model
+  could copy, and
 * rewrites the model's output (JSON or SSE stream), so the client never
   stores the URL in the first place.
+
+With ``shellguard`` on (default), command tool calls are also checked for
+off-task uploads and cloud metadata requests (``shellguard.py``), and with
+``privguard`` on (default) for privilege workarounds such as sudo or unshare
+after a permission error (``privguard.py``), in the output and in the history.
+
+Measured in llmtuning (experiments/qwen38-routify exp7c,
+experiments/routify-small-context): clean next tool call on stuck
+conversations 6/27 with a placeholder, 18-23/27 with repair; drop is never
+worse than swap and is safer when the swapped call is the last one.
 
 Rules are regexes applied case-insensitively, in order. A match is replaced by
 the rule's replacement text. Matches are whole "tokens": runs of characters
 that can appear in a URL or host name (no whitespace, quotes, brackets or
 backslashes), which keeps tool-call JSON arguments valid.
 
-Streaming: a URL arrives split over many deltas. For each output field the
+Streaming: a URL arrives split over many deltas. For each text field the
 rewriter holds back the trailing token (it may still grow into a match) and
 releases text once a token boundary arrives, the choice finishes, or the held
-token exceeds ``max_hold`` characters.
+token exceeds ``max_hold`` characters. Tool-call arguments are held whole
+until the choice finishes, so the complete command can be checked.
 """
 
 from __future__ import annotations
@@ -28,7 +40,11 @@ import json
 import re
 import threading
 import time
-from typing import Any, Callable
+from collections import OrderedDict
+from typing import Any, Callable, Iterable
+
+from slurmhelps.serving import privguard as _privguard
+from slurmhelps.serving import shellguard as _shellguard
 
 TOKEN_CHARS = r"[^\s\"'<>()\[\]{}\\`]"
 _TRAILING_TOKEN = re.compile(TOKEN_CHARS + r"+\Z")
@@ -58,6 +74,9 @@ def default_rules() -> list[Rule]:
     return [
         Rule(r"https?://" + TOKEN_CHARS + r"*?" + words + TOKEN_CHARS + r"*",
              BLOCKED_URL, "url", history="(link removed)"),
+        # Look-alike hosts with the same signed-URL shape (seen: routify-proxy.example/proxy_temp_file/...).
+        Rule(r"https?://" + TOKEN_CHARS + r"*?(?:/proxy_temp_file/|/trace_[0-9a-f]{20,}/requestId_[0-9a-f]{20,})"
+             + TOKEN_CHARS + r"*", BLOCKED_URL, "signed-url", history="(link removed)"),
         Rule(TOKEN_CHARS + r"*?" + words + TOKEN_CHARS + r"*", "removed-host", "host", history="(host removed)"),
         Rule(r"LTAI[0-9A-Za-z]{12,}", "REMOVED_KEY", "key", history="(key removed)"),
     ]
@@ -93,8 +112,20 @@ class Rewriter:
         max_hold: int = 4096,
         log_path: str | None = None,
         clock: Callable[[], float] = time.time,
+        history_mode: str = "drop",
+        shellguard: bool = True,
+        privguard: bool = True,
+        allow_hosts: Iterable[str] = (),
     ) -> None:
+        if history_mode not in ("drop", "swap"):
+            raise ValueError("history_mode must be 'drop' or 'swap'")
         self.rules = rules if rules is not None else default_rules()
+        self.history_mode = history_mode
+        self.shellguard = shellguard
+        self.privguard = privguard
+        self.allow_hosts = tuple(h.lower() for h in allow_hosts)
+        # request id -> hosts the conversation brought in (for upload provenance in the response)
+        self._allowed: OrderedDict[str, set[str]] = OrderedDict()
         self.max_hold = max_hold
         self.log_path = log_path or None
         self.clock = clock
@@ -144,20 +175,58 @@ class Rewriter:
     def scrub_request(self, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
         """Rewrite the conversation history (not tool schemas or sampling params)."""
         if isinstance(payload.get("messages"), list):
-            payload["messages"] = self.repair_history(payload["messages"], request_id)
+            messages = payload["messages"]
+            if self.shellguard:
+                allowed = {h for h in _shellguard.allowed_hosts(messages, self.allow_hosts)
+                           if not self.is_denied_url("http://" + h + "/")}
+                self._remember_allowed(request_id, allowed)
+                messages, events = _shellguard.repair_history(messages, allowed)
+                if events:
+                    self._record("request", request_id, events)
+            if self.privguard:
+                messages, events = _privguard.repair_history(messages)
+                if events:
+                    self._record("request", request_id, events)
+            payload["messages"] = self.repair_history(messages, request_id)
         for key in ("messages", "prompt", "input"):
             if key in payload:
                 payload[key] = self._walk(payload[key], "request", request_id)
         return payload
 
+    def _remember_allowed(self, request_id: str, hosts: set[str]) -> None:
+        with self._lock:
+            self._allowed[request_id] = hosts
+            while len(self._allowed) > 256:
+                self._allowed.popitem(last=False)
+
+    def allowed_for(self, request_id: str) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._allowed.get(request_id, ())) + self.allow_hosts
+
+    def rewrite_tool_call(self, name: str, arguments: str, request_id: str = "") -> str:
+        """Output side for one complete tool call: privguard, shellguard, then the text rules."""
+        if self.privguard:
+            new, hits = _privguard.rewrite_call(name, arguments)
+            if hits:
+                self._record("response", request_id, [{"rule": "privguard", "original": name,
+                                                       "kinds": ",".join(hits)}])
+                return new
+        if self.shellguard:
+            arguments, kinds = _shellguard.rewrite_call(name, arguments, self.allowed_for(request_id), BLOCKED_URL)
+            if kinds:
+                self._record("response", request_id, [{"rule": "shellguard", "original": name,
+                                                       "kinds": ",".join(kinds)}])
+        return self.rewrite_text(arguments, where="response", request_id=request_id)
+
     def is_denied_url(self, url: str) -> bool:
         return url.startswith(BLOCKED_URL) or any(r.regex.search(url) for r in self.rules)
 
     def repair_history(self, messages: list[Any], request_id: str = "") -> list[Any]:
-        """Point denied tool-call URLs at the intended URL, or drop the call.
+        """Drop tool calls to denied URLs (or, in swap mode, point them at the intended URL).
 
-        For each assistant message, every tool call whose arguments hold a
-        denied URL is handled with ``recover_target``. A recovered call keeps
+        Drop mode (default): every tool call whose arguments hold a denied URL
+        is removed with its tool result. Swap mode: each call is handled with
+        ``recover_target``; a recovered call keeps
         its id and result with the URL swapped (in the call, and wherever else
         that exact URL appears in the history), so the model sees that it tried
         the right page. An unrecoverable call is removed with its tool result;
@@ -189,6 +258,9 @@ class Rewriter:
                 changed = True
                 targets = {}
                 for u in bad:
+                    if self.history_mode != "swap":
+                        targets[u] = None
+                        continue
                     # The placeholder is shared by many calls: never reuse its swap.
                     known = None if u.startswith(BLOCKED_URL) else swaps.get(u)
                     targets[u] = known or recover_target(u, prose, used, self.is_denied_url)
@@ -224,6 +296,12 @@ class Rewriter:
     # -- non-streamed responses -------------------------------------------
     def rewrite_response(self, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
         if isinstance(payload.get("choices"), list):
+            for choice in payload["choices"]:
+                message = choice.get("message") if isinstance(choice, dict) else None
+                for call in (message or {}).get("tool_calls") or []:
+                    fn = call.get("function") if isinstance(call, dict) else None
+                    if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
+                        fn["arguments"] = self.rewrite_tool_call(fn.get("name", ""), fn["arguments"], request_id)
             payload["choices"] = self._walk(payload["choices"], "response", request_id)
         return payload
 
@@ -239,10 +317,17 @@ class StreamRewriter:
         self.request_id = request_id
         # (choice index, field, tool index or -1) -> held text
         self.held: dict[tuple[int, str, int], str] = {}
+        self.names: dict[tuple[int, int], str] = {}
         self.template: dict[str, Any] = {}
 
     def _push(self, key: tuple[int, str, int], piece: str, final: bool) -> str:
         buffer = self.held.pop(key, "") + (piece or "")
+        if key[1] == "arguments":
+            # Held whole: a command is only checked once it is complete.
+            if not final:
+                self.held[key] = buffer
+                return ""
+            return self.rewriter.rewrite_tool_call(self.names.get((key[0], key[2]), ""), buffer, self.request_id)
         if not final:
             match = _TRAILING_TOKEN.search(buffer)
             if match and len(match.group(0)) <= self.rewriter.max_hold:
@@ -270,6 +355,8 @@ class StreamRewriter:
                     target[field] = self._push(key, target[field], final)
             for call in target.get("tool_calls") or []:
                 fn = call.get("function") if isinstance(call, dict) else None
+                if isinstance(fn, dict) and fn.get("name"):
+                    self.names[(index, int(call.get("index", 0) or 0))] = str(fn["name"])
                 if isinstance(fn, dict) and isinstance(fn.get("arguments"), str):
                     key = (index, "arguments", int(call.get("index", 0) or 0))
                     seen.add(key)
