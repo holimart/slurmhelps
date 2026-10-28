@@ -123,6 +123,12 @@ def offer_verdict(offer, opts):
     want_n = int(opts.get("num_gpus") or 1)
     if int(offer.get("num_gpus") or 0) != want_n:
         reasons.append("num_gpus %s != %s" % (offer.get("num_gpus"), want_n))
+    # A "1x RTX 3090" offer can still be a fractional slice of the card
+    # (gpu_frac 0.25 here); benchmarking on a shared slice is meaningless.
+    min_frac = float(opts.get("min_gpu_frac") or 1.0)
+    frac = float(offer.get("gpu_frac") or 1.0)
+    if frac < min_frac:
+        reasons.append("gpu_frac %.3f < %.3f (fractional GPU)" % (frac, min_frac))
     ram_gb = float(offer.get("cpu_ram") or 0) / 1024.0
     if opts.get("min_ram_gb") and ram_gb < float(opts["min_ram_gb"]):
         reasons.append("host RAM %.0f GB < %s GB" % (ram_gb, opts["min_ram_gb"]))
@@ -163,6 +169,7 @@ def annotate_offer(offer, model_gb, hours):
         "id": offer.get("id"),
         "gpu_name": offer.get("gpu_name"),
         "num_gpus": offer.get("num_gpus"),
+        "gpu_frac": offer.get("gpu_frac"),
         "dph_total": dph,
         "driver_version": offer.get("driver_version"),
         "cuda_max_good": offer.get("cuda_max_good"),
@@ -254,12 +261,13 @@ def _opts_from(args):
         "max_down_cost_per_tb": args.max_down_cost_per_tb,
         "min_reliability": args.min_reliability,
         "max_dph": args.max_dph,
+        "min_gpu_frac": getattr(args, "min_gpu_frac", None),
     }
     if args.recipe_file:
         rec = recipe_options(args.recipe_file)
         for key in ("gpu_name", "num_gpus", "min_ram_gb", "min_disk_gb",
                     "min_driver", "max_dph", "max_down_cost_per_tb",
-                    "min_reliability"):
+                    "min_reliability", "min_gpu_frac"):
             if opts.get(key) in (None, False) and rec.get(key) is not None:
                 opts[key] = rec[key]
         opts["_recipe"] = rec
@@ -490,7 +498,7 @@ def cmd_upload(args):
         host = inst.get("ssh_host") or inst.get("public_ipaddr") or host
         port = inst.get("ssh_port") or port
     cmd = ["rsync", "-az", "--no-owner", "--no-group",
-           "-e", " ".join(shlex.quote(x) for x in ssh_argv(args, host, port)[:-1] + ["root@%s" % host]),
+           "-e", " ".join(shlex.quote(x) for x in ssh_argv(args, host, port)[:-1]),
            args.source, "root@%s:%s" % (host, args.dest)]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in cmd))
@@ -525,7 +533,7 @@ def cmd_stage(args):
     script = args.script or recipe_setup or "setup.sh"
     remote = args.remote_dir or "/root"
     ssh = ssh_argv(args, host, port)
-    rsync = ["rsync", "-az", "-e", " ".join(shlex.quote(x) for x in ssh[:-1] + ["root@%s" % host])]
+    rsync = ["rsync", "-az", "-e", " ".join(shlex.quote(x) for x in ssh[:-1])]
     rsync += [str(cloud_dir / f) for f in files] + ["root@%s:%s/" % (host, remote)]
     run = ssh + ["cd %s && PACKS_TO_FETCH=%s STRATA_ROOT=%s bash %s"
                  % (shlex.quote(remote), shlex.quote(str(packs or "iq3s coder")),
@@ -578,7 +586,7 @@ def cmd_pull(args):
     ssh = ssh_argv(args, host, port)
     dest = Path(args.dest or "vast-results").expanduser()
     cmd = ["rsync", "-az", "--no-owner", "--no-group",
-           "-e", " ".join(shlex.quote(x) for x in ssh[:-1] + ["root@%s" % host]),
+           "-e", " ".join(shlex.quote(x) for x in ssh[:-1]),
            "root@%s:%s" % (host, args.remote or "/root/results/"), str(dest) + "/"]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in cmd))
@@ -626,6 +634,7 @@ def build_parser():
         sp.add_argument("--min-cuda", default=None)
         sp.add_argument("--max-down-cost-tb", dest="max_down_cost_per_tb", type=float)
         sp.add_argument("--min-reliability", type=float)
+        sp.add_argument("--min-gpu-frac", type=float, default=None)
         sp.add_argument("--max-dph", type=float)
         sp.add_argument("--model-gb", type=float)
         sp.add_argument("--hours", type=float)

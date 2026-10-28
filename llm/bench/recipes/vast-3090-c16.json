@@ -14,6 +14,7 @@
       "num_gpus": 1,
       "min_ram_gb": 60,
       "min_disk_gb": 150,
+      "min_gpu_frac": 1.0,
       "min_driver": "580.65",
       "max_down_cost_per_tb": 5.0,
       "min_reliability": 0.92,
