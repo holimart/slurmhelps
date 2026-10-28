@@ -1,4 +1,6 @@
-# RUNBOOK — RTX 3090 C16 batch campaign (`vast-3090-c16`)
+# RUNBOOK — RTX 3090 batch campaign, C1–C8 (`vast-3090-c16`)
+
+**Engine finding (2026-10-28): Strata 0.1.52/0.1.53 rejects `--parallel 16` — `Use 1 to 8`. C16 is not measurable in this engine; the run measures C1–C8. A 16-client test over 8 slots is oversubscription, not a C16 gain.**
 
 **Status: prepared, not rented.** The Vast account is at −$0.78 with
 `can_pay=false` after the 2026-10-25 bandwidth incident; nothing here spends
@@ -35,9 +37,9 @@ reliability >= 0.92, dph <= $0.25/h.
   includes it in `PACKS`.
 
 ## Matrix (exact)
-- contexts **4096, 16384, 32768** × concurrency **1, 2, 4, 8, 16**
+- contexts **4096, 16384, 32768** × concurrency **1, 2, 4, 8** (the engine cap)
 - 512 generated tokens, 3 requests/slot, `pad_safety 2048`, temperature 0
-- 3 repeats at C1, 1 at C2/C4/C8/C16
+- 3 repeats at C1, 1 at C2/C4/C8
 - capture per-stream decode, aggregate tok/s, TTFT p50/p95, expert-cache hit,
   VRAM/RAM, and power (`nvidia-smi dmon` or the engine's power bracket)
 
@@ -61,9 +63,9 @@ python3 llm/cloud/vast/vast.py stage --instance <ID> --recipe-file llm/bench/rec
 
 # 4) run the C16 matrix (remote logs stay on the host; pull at the end)
 python3 llm/cloud/vast/vast.py run --instance <ID> --script /root/run-matrix2.sh \
-  --set 'CTXS=4096 16384 32768' --set 'BATCHES=1 2 4 8 16' --set 'MAXTOK=512' \
+  --set 'CTXS=4096 16384 32768' --set 'BATCHES=1 2 4 8' --set 'MAXTOK=512' \
   --set 'MAXCTX=32768' --set 'PACKS=iq3s q2_0' --set 'RPS=3' --set 'SAFETY=2048' \
-  --set 'PARALLEL=16' --set 'DEADLINE=<epoch>' \
+  --set 'PARALLEL=8' --set 'DEADLINE=<epoch>' \
   --background --yes
 
 # 5) pull summaries, then ALWAYS destroy
@@ -72,17 +74,17 @@ python3 llm/cloud/vast/vast.py pull --instance <ID> \
 python3 llm/cloud/vast/vast.py destroy --instance <ID> --yes
 ```
 
-`run-matrix2.sh` now sets `--parallel` from `PARALLEL` (auto = max(BATCHES)); the
-old hardcoded `--parallel 4` would have made every C8/C16 cell a C4 cell. Pass
-`PARALLEL=16` explicitly or rely on the auto value.
+`run-matrix2.sh` sets `--parallel` from `PARALLEL` (auto = max(BATCHES)); with
+BATCHES 1..8 the value is 8, the engine's cap. If you ever test 16 clients, label
+it as oversubscription and do not report it as a C16 batch gain.
 
 Rules: never tail logs on the remote host or on Lustre; poll the instance
 status; pull only small summaries; destroy even on failure.
 
 ## Acceptance
-- C16 aggregate measured at 4K and 16K (32K if memory holds), with the
-  per-stream number.
-- Gain = C16 aggregate / C1 aggregate; report it next to 1.30×, 2.0×, 2.88×.
+- C8 aggregate measured at 4K, 16K and 32K, with the per-stream number; C16 is
+explicitly reported as unsupported by the engine.
+- Gain = C8 aggregate / C1 aggregate; the C16 2.88× row stays a projection.
 - €/Mtok at C16 with €1,900 capex amortised and €0.20/kWh (state the method).
 - If per-stream < 10 tok/s, say so — C16 is a throughput mode, not latency.
 - No fabrication: an OOM or a missing cell is recorded with the real error.

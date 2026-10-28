@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "vast-3090-c16",
-  "description": "RTX 3090 (24 GB) on Vast.ai: C1/C2/C4/C8/C16 batch scaling and output tok/s at 4K/16K/32K, IQ3_S in the RAM-tier (88 GB budget) with Q2_0 as the fallback. Measures the real C16 aggregate gain that the economics currently assumes (1.3x / 2.0x / 2.88x).",
+  "description": "RTX 3090 (24 GB) on Vast.ai: C1/C2/C4/C8 batch scaling and output tok/s at 4K/16K/32K, IQ3_S RAM-tier with Q2_0 fallback. The installed Strata engine (0.1.52/0.1.53) rejects --parallel > 8 ('Use 1 to 8'), so C16 is NOT measured; the 2.88x C16 projection stays unvalidated.",
   "backend": "vast",
   "runner": "cloud",
   "model": "strata-packs",
@@ -27,9 +27,18 @@
   },
   "mode": "cloud",
   "cells": [
-    "4096:1", "4096:2", "4096:4", "4096:8", "4096:16",
-    "16384:1", "16384:2", "16384:4", "16384:8", "16384:16",
-    "32768:1", "32768:2", "32768:4", "32768:8", "32768:16"
+    "4096:1",
+    "4096:2",
+    "4096:4",
+    "4096:8",
+    "16384:1",
+    "16384:2",
+    "16384:4",
+    "16384:8",
+    "32768:1",
+    "32768:2",
+    "32768:4",
+    "32768:8"
   ],
   "probe": {
     "max_context": 32768,
@@ -53,10 +62,11 @@
     "basis": "113.2 GB download at $2.67/TB ($0.30) + 3 h at $0.176/h ($0.53) + disk; the 2026-10-25 host at $53.33/TB cost $3.80 for 73 GB and is excluded by max_down_cost_per_tb"
   },
   "caveats": [
-    "The installed engine (0.1.52) rejects --parallel > 8. C16 is therefore measured as 16 concurrent clients against 8 batch slots; the 2.88x aggregate multiplier was a projection from cheap_compare.csv, not a 3090 measurement.",
+    "The installed engine rejects --parallel 16 ('16 requests at once is outside what the engine can do. Use 1 to 8'). C16 is therefore NOT measurable in this engine: a 16-client test against 8 slots would be oversubscription (C8 throughput with queueing), not a C16 batch gain. The 2.88x projection remains unvalidated; a real C16 needs llama.cpp -np 16 or an engine change. This run measures C1..C8.",
     "Memory is tight: 24 GB VRAM + 60-64 GB host = 84-88 GB against IQ3_S at 83.6 GB; KV at C16 is 51 MB at 4K and 410 MB at 32K. Q2_0 (66 GB) is the fallback if IQ3_S OOMs.",
     "Always filter Vast offers on internet_down_cost_per_tb (<= $5/TB) and driver >= 580.65; the cheapest Quebec 3090s run driver 570.181 and are unusable.",
     "No credit is consumed until the run is launched; the account must be recharged first (the previous 3090 attempt ended at -$0.78).",
-    "Per-stream at C16 is expected to fall below the 10 tok/s interactive floor even if aggregate wins; report both."
+    "Per-stream at C16 is expected to fall below the 10 tok/s interactive floor even if aggregate wins; report both.",
+    "The engine also warns that 8 slots exceed what a 24 GB card usually holds (it fits ~3 at 32K); C8 at 32K may be slower than C8 at 4K/16K. Report both, do not extrapolate."
   ]
 }
