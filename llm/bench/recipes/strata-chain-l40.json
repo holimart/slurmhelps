@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "strata-chain-l40",
+  "description": "Checkpoint chain on one L40S: one growing conversation 1k -> 100k -> 200k -> 262144, 512 tokens per turn.",
+  "backend": "strata",
+  "runner": "chain",
+  "model": "iq3s",
+  "experiment": "2026-10-26-chain",
+  "evidence": ["strata-runs/2026-10-26-chain/iq3s"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-02",
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "01:00:00",
+    "gpus": "0",
+    "gpu_type": "1x L40S 48GB"
+  },
+  "mode": "chain",
+  "probe": {
+    "max_context": 262144,
+    "max_tokens": 512,
+    "tokens_per_turn": 512,
+    "stops": "1024,100000,200000,262144",
+    "pad_safety": 128,
+    "chain_last_repeats": 1
+  },
+  "budget_min": 60,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 30,
+    "basis": "cold 262144 prefill ~64 s (2026-10-25-l40x1-256k); chain pays four prefills (delta if reuse engages) plus 4 x 512-token decode; staging + engine load ~10 min"
+  },
+  "caveats": [
+    "This is not a cold rerun: turn 1 at ~1k is cold, later turns should reuse the previous prompt checkpoint. If reuse does not engage the numbers are full-context prefills and that is the finding.",
+    "The conversation cache is 8 GiB / 4 parked conversations on the baseline recipe; a 262k conversation can be evicted or exceed the cache, so later turns may fail to reuse.",
+    "Each stop is clamped to 262144 - 512 - 128 = 261504 prompt tokens; the top turn's prompt is therefore slightly below the model ceiling.",
+    "The historical cold 256K cells generated 128 tokens; this chain generates 512 per turn, so aggregate/decode compare only directionally.",
+    "The chain is C1 and sequential by design; it does not measure concurrency and does not park more than one conversation.",
+    "chain_last_repeats=1 adds one identical request at the top stop as a cheap cache-hit sanity check (expect reused ~= prompt-5)."
+  ]
+}

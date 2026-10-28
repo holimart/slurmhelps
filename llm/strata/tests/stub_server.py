@@ -18,11 +18,15 @@ The synthetic latencies are deterministic so the self-test can assert the
 engine-reported decode rate: completion tokens at exactly TOKEN_DELAY_MS
 each -> decode_tok_s_p50 ~ 1000/TOKEN_DELAY_MS.
 
-`--cache-reuse` (off by default) simulates the engine's prompt cache: a
-byte-identical prompt seen before reports `reused = prompt_tokens-1` in the
-`requests`/`conversation_cache` metrics and its prefill time is multiplied by
-`--warm-prefill-factor`, so a warm-mode probe test sees a deterministic TTFT
-drop on repeats.
+`--cache-reuse` (off by default) simulates the engine's prompt cache.  A
+byte-identical prompt seen before reports `reused = prompt_tokens-1` and its
+prefill time is multiplied by `--warm-prefill-factor` (the historical warm
+behaviour).  A prefix extension (a new prompt that starts with an earlier one)
+reports `reused = prefix_tokens-1` and prefills only the delta, so a chain-mode
+probe test sees both growing reuse and a shorter TTFT on later turns.
+
+GET /debug/state exposes the last few full request bodies (seq/chars/text) so
+tests can prove that consecutive chain prompts are prefix extensions.
 
 Usage: stub_server.py [--port N] [--token-delay-ms 10] [--prefill-ms-per-token 0.025]
                       [--cache-reuse] [--warm-prefill-factor 0.2]
@@ -41,7 +45,7 @@ CONFIG = {"token_delay_ms": 10.0, "prefill_ms_per_token": 0.025,
           "cache_reuse": False, "warm_prefill_factor": 0.2}
 STATS = {"requests": 0, "reused_requests": 0, "reused_tokens": 0,
          "prompt_tokens": 0, "last_reused": 0, "last_prompt": 0,
-         "cache": {}, "log": []}
+         "cache": {}, "cache_text": [], "request_log": [], "log": []}
 STATS_LOCK = threading.Lock()
 
 
@@ -81,6 +85,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/v1/models":
             self._send_json(200, {"object": "list", "data": [
                 {"id": MODEL_ID, "object": "model", "owned_by": "strata-selftest"}]})
+        elif path == "/debug/state":
+            with STATS_LOCK:
+                requests = [{"seq": i + 1, "chars": len(text), "text": text}
+                            for i, text in enumerate(STATS["request_log"])]
+            self._send_json(200, {"requests": requests})
         elif path == "/metrics":
             with STATS_LOCK:
                 n = STATS["requests"]
@@ -146,22 +155,48 @@ class Handler(BaseHTTPRequestHandler):
             n = STATS["requests"]
             digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             reused = 0
+            exact_repeat = False
             if CONFIG["cache_reuse"]:
-                seen = STATS["cache"].get(digest)
-                if seen is not None:
+                exact_repeat = STATS["cache"].get(digest) is not None
+                if exact_repeat:
                     reused = max(1, prompt_tokens - 1)
-                    STATS["cache"][digest] = seen + 1
-                    STATS["reused_requests"] += 1
-                    STATS["reused_tokens"] += reused
+                else:
+                    # Longest common prefix with any cached prompt (one turn
+                    # earlier in a chain).  Tokens are len//4, like prompt_tokens.
+                    prefix_chars = 0
+                    for old in STATS["cache_text"]:
+                        limit = min(len(old), len(content))
+                        i = 0
+                        while i < limit and old[i] == content[i]:
+                            i += 1
+                        if i > prefix_chars:
+                            prefix_chars = i
+                    if prefix_chars:
+                        reused = max(0, prefix_chars // 4 - 1)
+                if exact_repeat:
+                    STATS["cache"][digest] += 1
                 else:
                     STATS["cache"][digest] = 1
+                STATS["cache_text"].append(content)
+                del STATS["cache_text"][:-8]
+                if reused:
+                    STATS["reused_requests"] += 1
+                    STATS["reused_tokens"] += reused
             STATS["prompt_tokens"] += prompt_tokens
             STATS["last_reused"] = reused
             STATS["last_prompt"] = prompt_tokens
+            STATS["request_log"].append(content)
+            del STATS["request_log"][:-32]
         cid = "chatcmpl-stub-%d" % n
-        prompt_ms = prompt_tokens * CONFIG["prefill_ms_per_token"]
-        if reused:
+        if exact_repeat:
+            # Historical warm shape: full prompt x warm factor.
+            prompt_ms = prompt_tokens * CONFIG["prefill_ms_per_token"]
             prompt_ms *= CONFIG["warm_prefill_factor"]
+        elif reused:
+            # Prefix extension: only the delta is prefilled.
+            prompt_ms = max(1, prompt_tokens - reused) * CONFIG["prefill_ms_per_token"]
+        else:
+            prompt_ms = prompt_tokens * CONFIG["prefill_ms_per_token"]
         predicted_ms = completion_tokens * CONFIG["token_delay_ms"]
         usage = {"prompt_tokens": prompt_tokens,
                  "completion_tokens": completion_tokens,

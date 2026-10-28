@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "name": "strata-warm",
+  "description": "Warm prompt-cache TTFT on one L40S: 1k/4k/16k/64k at C1 plus 1k/4k at C4, three repeats.",
+  "backend": "strata",
+  "runner": "warm",
+  "model": "iq3s",
+  "experiment": "2026-10-25-strata-smoke-matrix",
+  "evidence": [
+    "strata-runs/2026-10-25-warm/l40x1-iq3s"
+  ],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-06",
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "11:30:00",
+    "gpus": "0",
+    "gpu_type": "1x L40S 48GB"
+  },
+  "mode": "warm",
+  "cells": [
+    "1024:1",
+    "4096:1",
+    "16384:1",
+    "65536:1",
+    "1024:4",
+    "4096:4"
+  ],
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "warm_repeats": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 120,
+  "output": {
+    "root": "strata_runs",
+    "subdir": "{name}-{stamp}"
+  },
+  "estimate": {
+    "wall_minutes": 5,
+    "basis": "2026-10-25 job 38237007 (IQ3_S warm, 4m52s)"
+  },
+  "caveats": [
+    "Cold cells were not rerun; the comparison to stored cold numbers is invalid because that probe was uncalibrated. Repeat 1 inside the same server is the apples-to-apples cold reference.",
+    "Warm mode sends saltless, byte-identical prompts; a C=1 cell can hit a checkpoint left by an earlier cell and that is reported, not hidden.",
+    "The conversation cache is 8 GiB / 4 parked conversations on the baseline recipe; larger contexts can evict.",
+    "The warm section lives in the 2026-10-25 smoke-matrix document (section \"Warm vs cold cache\"); the evidence dir also has NOTES.md and warm-vs-cold.csv."
+  ]
+}

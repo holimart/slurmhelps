@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100-prefill-chunks-131k",
+  "description": "Prompt chunk size at the 131k window on the resident 4x V100-32G IQ3_S server: auto (8192 measured), 4096, 8192, 16384, plus the CPU prefill share env.",
+  "backend": "strata",
+  "runner": "knobs",
+  "model": "iq3s",
+  "experiment": "2026-10-27-v100-extras",
+  "evidence": [],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:4",
+    "cpus": 32,
+    "mem": "340G",
+    "time": "11:00:00",
+    "gpus": "0,1,2,3",
+    "gpu_type": "4x V100-SXM2-32GB"
+  },
+  "mode": "knobs",
+  "options": {
+    "contexts": "131072",
+    "batches": "1",
+    "variants": "basefull,pf4096,pf8192,pf16384,cpushare_auto"
+  },
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 35,
+  "output": {"root": "strata_runs", "subdir": "2026-10-27-v100-extras/m8-prefill-131k"},
+  "estimate": {
+    "wall_minutes": 25,
+    "basis": "five launches plus 3 x 34 s prefill per variant"
+  },
+  "caveats": [
+    "NEW DEFINITION, first run 2026-10-27. The engine's auto chunk on this recipe was 8192; pf8192 is therefore a variance control.",
+    "STRATA_PREFILL_CPU_SHARE is documented as off for layer splits and --batch; cpushare_auto records the engine's own refusal/skip line rather than assuming a gain.",
+    "Prefill chunk size changes wall time and memory, not answer quality."
+  ]
+}

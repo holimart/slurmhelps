@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "strata-v100-resident-2x",
+  "description": "Q2_0 fully resident on two V100-32G cards (volta05), 1k-128k at C1/2/4.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "q2_0",
+  "experiment": "2026-10-26-v100-residency-kernels",
+  "evidence": ["strata-runs/2026-10-26-v100-resident/a-2x-q2_0"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-gpulab",
+    "nodelist": "volta05",
+    "gres": "gpu:2",
+    "cpus": 32,
+    "mem": "340G",
+    "time": "11:30:00",
+    "gpus": "0,1",
+    "gpu_type": "2x V100-SXM2-32GB"
+  },
+  "mode": "cold",
+  "cells": [
+    "1024:1", "1024:2", "1024:4",
+    "4096:1", "4096:2", "4096:4",
+    "16384:1", "16384:2", "16384:4",
+    "65536:1", "65536:2", "65536:4",
+    "131072:1"
+  ],
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 120,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 120,
+    "basis": "2026-10-26 phase A budget (one server, Q2_0 on 2x V100)"
+  },
+  "caveats": [
+    "This is phase A of the one-allocation wrapper llm/strata/experiments/2026-10-26-v100-run.sh; that wrapper stages the 28.8 GB PLE shard once for A/B/E. Running this recipe alone pays the Lustre staging read again.",
+    "Full residency must be proven from the engine log ('100% of the experts resident'), not assumed.",
+    "The Q2_0 shard1 is 37.6 GB; delete it from /tmp after the phase if the next pack needs the space.",
+    "Only 131072:1 is attempted at the top; 131072 C>1 was not in the historical plan.",
+    "V100 cuda12 engine only; driver 580.x accepts it."
+  ]
+}

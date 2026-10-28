@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # fetch-models.sh — pull the Strata benchmark GGUFs into the model library.
 #
-# Thin helper: runs `hf download` (resumable) for the two Qwen3.8-Flash-Next
-# GGUF packs the Strata benchmark matrix measures, and writes a manifest
+# Thin helper: runs `hf download` (resumable) for the Qwen3.8-Flash-Next
+# GGUF packs the Strata benchmark matrix measures (IQ3_S, Coder IQ1_M and
+# Q2_0), and writes a manifest
 # (repo, file, size, sha256) per fetched file. Sizes and SHA-256 are the
 # Hub LFS pointers pinned in the Strata source checkout
 # (/work/ffa/holecem/src/Strata/setup.py, ISTA_FILES / CODER_FILES, repos at
@@ -22,7 +23,7 @@
 # is the fallback when hardlinks are unavailable).
 #
 # Usage:
-#   fetch-models.sh [--only iq3s|coder|all] [--verify] [--with-mmproj] [--submit]
+#   fetch-models.sh [--only iq3s|coder|q2_0|all] [--verify] [--with-mmproj] [--submit]
 #
 #   --only X        fetch just this pack (default: all)
 #   --verify        audit only: check presence + exact size + sha256 of every
@@ -38,6 +39,7 @@
 # Layout produced (bench-matrix.sh expects exactly this):
 #   /work/ffa/holecem/models/strata/iq3s/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-0000[12]-of-00002.gguf
 #   /work/ffa/holecem/models/strata/coder/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-0000[12]-of-00002.gguf
+#   /work/ffa/holecem/models/strata/q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-0000[12]-of-00002.gguf
 #   /work/ffa/holecem/models/strata/_shared/Qwen3.8-Flash-Next-GSQ-RCO-00002-of-00002.gguf
 #   /work/ffa/holecem/models/strata/manifest.txt   (append-only, one key=value line per file)
 #
@@ -57,7 +59,7 @@ WITH_MMPROJ=0
 SUBMIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --only) ONLY=${2:?--only needs iq3s|coder|all}; shift 2 ;;
+    --only) ONLY=${2:?--only needs iq3s|coder|q2_0|all}; shift 2 ;;
     --only=*) ONLY=${1#*=}; shift ;;
     --verify) VERIFY=1; shift ;;
     --with-mmproj) WITH_MMPROJ=1; shift ;;
@@ -66,7 +68,7 @@ while [ $# -gt 0 ]; do
     *) echo "fetch-models: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$ONLY" in iq3s|coder|all) ;; *) echo "fetch-models: --only must be iq3s|coder|all" >&2; exit 2 ;; esac
+case "$ONLY" in iq3s|coder|q2_0|all) ;; *) echo "fetch-models: --only must be iq3s|coder|q2_0|all" >&2; exit 2 ;; esac
 
 if [ "$SUBMIT" = 1 ] && [ "$VERIFY" != 1 ]; then
   here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -105,6 +107,10 @@ files_iq3s() {
 files_coder() {
   echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf 29608446496 e11083ba855e7666b48ea3f2db6a9c3a20c18751a012cc24f948de91b7087fad"
   echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
+}
+files_q2_0() {
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf 37623740192 69820c02ec7d0b45ef2ebb19d6620299db749fe2aded7f39f93c6b88b199b720"
+  echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf 28800138432 316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113"
 }
 mmproj() {
   echo "ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF mmproj-Qwen3.8-Flash-Next-BF16.gguf 907543008 b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0"
@@ -174,8 +180,10 @@ ensure_shared_shard() { # repo sub hub_path file want_size
     return 0
   fi
   for cand in "$MODELS_ROOT/iq3s/$file" "$MODELS_ROOT/coder/$file" \
+              "$MODELS_ROOT/q2_0/$file" \
               "$MODELS_ROOT/models/IQ3_S/$file" \
-              "$MODELS_ROOT/models/coder-IQ1_M/$file"; do
+              "$MODELS_ROOT/models/coder-IQ1_M/$file" \
+              "$MODELS_ROOT/models/Q2_0/$file"; do
     if [ "$(file_size "$cand")" = "$want_size" ]; then
       log "shared shard $file: reusing existing $cand"
       link_or_copy "$cand" "$canonical" "$file -> _shared" || return 1
@@ -267,6 +275,9 @@ if [ "$VERIFY" = 1 ]; then
     audit_pack coder files_coder "$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M"
     [ "$WITH_MMPROJ" = 1 ] && audit_pack coder-mmproj mmproj "$MODELS_ROOT/coder" "$MODELS_ROOT/models/coder-IQ1_M"
   fi
+  if [ "$ONLY" = all ] || [ "$ONLY" = q2_0 ]; then
+    audit_pack q2_0 files_q2_0 "$MODELS_ROOT/q2_0" "$MODELS_ROOT/models/Q2_0"
+  fi
   log "audit complete: missing=$AUDIT_MISSING corrupt=$AUDIT_BAD (library $MODELS_ROOT)"
   if [ "$AUDIT_BAD" != 0 ]; then
     log "one or more present files are corrupt; re-download them (fetch-models.sh)"
@@ -283,6 +294,9 @@ fi
 if [ "$ONLY" = all ] || [ "$ONLY" = coder ]; then
   fetch_pack coder coder files_coder || fail=1
   if [ "$fail" = 0 ] && [ "$WITH_MMPROJ" = 1 ]; then fetch_pack coder-mmproj coder mmproj || fail=1; fi
+fi
+if [ "$ONLY" = all ] || [ "$ONLY" = q2_0 ]; then
+  fetch_pack q2_0 q2_0 files_q2_0 || fail=1
 fi
 
 [ -f "$MANIFEST" ] && tail -n 8 "$MANIFEST"

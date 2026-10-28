@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/slurmhelps/llm/bench/recipe.schema.json",
+  "title": "benchctl recipe",
+  "description": "One measurement definition. benchctl validates every field so a typo fails before anything is submitted. The backend scripts stay the source of truth; a recipe only describes how to call them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "description", "backend", "runner", "model", "hardware", "mode", "output", "caveats"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,48}$"
+    },
+    "description": {"type": "string", "minLength": 10},
+    "backend": {"enum": ["strata", "vllm", "glm53", "vast"]},
+    "runner": {
+      "enum": ["matrix", "knobs", "warm", "chain", "serve", "measure", "tasks", "bench", "context", "cache", "submit", "cloud"]
+    },
+    "model": {"type": "string", "minLength": 1},
+    "experiment": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+$"},
+    "evidence": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["cluster", "cloud"]},
+        "partition": {"type": "string", "minLength": 1},
+        "nodelist": {"type": "string", "minLength": 1},
+        "gres": {"type": "string", "pattern": "^gpu:[0-9]+$"},
+        "cpus": {"type": "integer", "minimum": 1},
+        "mem": {"type": "string", "pattern": "^[0-9]+[GMT]$"},
+        "time": {"type": "string", "pattern": "^[0-9]{1,3}:[0-5][0-9]:[0-5][0-9]$"},
+        "gpus": {"type": "string", "pattern": "^[0-9](,[0-9])*$"},
+        "gpu_type": {"type": "string", "minLength": 1},
+        "node": {"type": "string", "minLength": 1},
+        "offer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["gpu_name", "num_gpus", "model_gb", "hours"],
+          "properties": {
+            "gpu_name": {"type": "string", "minLength": 1},
+            "num_gpus": {"type": "integer", "minimum": 1, "maximum": 8},
+            "min_ram_gb": {"type": "integer", "minimum": 8},
+            "min_disk_gb": {"type": "integer", "minimum": 20},
+            "min_driver": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$"},
+            "max_dph": {"type": "number", "minimum": 0},
+            "max_down_cost_per_tb": {"type": "number", "minimum": 0},
+            "min_reliability": {"type": "number", "minimum": 0, "maximum": 1},
+            "model_gb": {"type": "number", "exclusiveMinimum": 0},
+            "hours": {"type": "number", "exclusiveMinimum": 0},
+            "image": {"type": "string", "minLength": 1},
+            "disk_gb": {"type": "integer", "minimum": 20}
+          }
+        }
+      }
+    },
+    "mode": {
+      "enum": ["cold", "warm", "chain", "knobs", "matrix", "measure", "serve", "bench", "context", "cache", "cloud"]
+    },
+    "cells": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[0-9]+:[0-9]+$"}
+    },
+    "warm_cells": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "pattern": "^[0-9]+:[0-9]+$"}
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_context": {"type": "integer", "minimum": 1024},
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "requests_per_slot": {"type": "integer", "minimum": 1},
+        "pad_safety": {"type": "integer", "minimum": 0},
+        "warm_repeats": {"type": "integer", "minimum": 1},
+        "stops": {"type": "string", "pattern": "^[0-9]+(,[0-9]+)*$"},
+        "tokens_per_turn": {"type": "integer", "minimum": 1},
+        "chain_last_repeats": {"type": "integer", "minimum": 0},
+        "temperature": {"type": "number", "minimum": 0, "maximum": 2},
+        "timeout_s": {"type": "integer", "minimum": 1}
+      }
+    },
+    "options": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {"type": "string", "minLength": 1},
+        "contexts": {"type": "string", "minLength": 1},
+        "batches": {"type": "string", "minLength": 1},
+        "variants": {"type": "string", "minLength": 1},
+        "engine": {"enum": ["sglang", "vllm", "llamacpp"]},
+        "variant": {"enum": ["nvfp4", "fp8", "q4_k_s", "q4_k_m", "iq4_xs", "iq3_m"]},
+        "isl": {"type": "integer", "minimum": 1},
+        "osl": {"type": "integer", "minimum": 1},
+        "runs": {"type": "integer", "minimum": 1},
+        "workers": {"type": "integer", "minimum": 1},
+        "prefixes": {"type": "string", "minLength": 1},
+        "suffix": {"type": "integer", "minimum": 1},
+        "ctx": {"type": "integer", "minimum": 1024},
+        "max_model_len": {"type": "integer", "minimum": 1024},
+        "base_url": {"type": "string", "pattern": "^https?://"},
+        "served_model": {"type": "string", "minLength": 1},
+        "flavour": {"enum": ["qwen38", "qwen35-122b", "qwen35-35b"]},
+        "self_test": {"type": "boolean"},
+        "flow": {"enum": ["plan", "rent", "run", "pull", "destroy", "status"]},
+        "packs": {"type": "string", "minLength": 1},
+        "setup_script": {"type": "string", "minLength": 1}
+      }
+    },
+    "budget_min": {"type": "integer", "minimum": 1},
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "subdir"],
+      "properties": {
+        "root": {"enum": ["results", "strata_runs", "glm_runs", "logs"]},
+        "subdir": {"type": "string", "minLength": 1},
+        "log": {"type": "string", "minLength": 1}
+      }
+    },
+    "estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "wall_minutes": {"type": "integer", "minimum": 1},
+        "cost_usd": {"type": "number", "minimum": 0},
+        "basis": {"type": "string", "minLength": 5}
+      }
+    },
+    "caveats": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 10}
+    }
+  }
+}

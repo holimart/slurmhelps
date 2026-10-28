@@ -44,7 +44,10 @@
 #   --batches LIST       concurrent clients (default 1,4; batch8 adds C=8)
 #   --variants LIST      all | comma list (default all).  Names:
 #                        all,control,nospec,spec_pure,kvbf16,kvfp16,kvres16k,
-#                        kvres64k,batch8,groups1,mtpserial,expert_cache_max
+#                        kvres64k,batch8,groups1,mtpserial,vramreserve,
+#                        expert_cache_max,sm70table,fusedecode,pfwmma,
+#                        argmaxrows,grnormfast,kvq4_0,kvk8v4,pf4096,pf8192,
+#                        pf16384,cpushare_auto,batchmtp,lookup4
 #   --budget-min MIN     stop opening cells after this wall time (default 240;
 #                        keep it well inside the 11.5 h Slurm limit)
 #   --outdir DIR         results root (default
@@ -63,6 +66,8 @@
 # Variant definitions (one knob each; baseline otherwise):
 #   control       baseline recipe, ONE cell (1024, C1): host/engine variance
 #                 check against the stored 141.69 tok/s (iq3s) / 140.88 (coder)
+#   basefull      baseline recipe at the WHOLE ladder: the control every kernel
+#                 variant is compared against cell by cell (control is one cell)
 #   nospec        --spec removed: IMPOSSIBLE on a native IQ pack (the engine
 #                 refuses to start: it needs --spec T (T >= 2)); recorded as
 #                 launch-fail with the real error
@@ -84,6 +89,11 @@
 #   mtpserial     STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1 (what the docs
 #                 call serial MTP windows; the SERIAL var alone does NOT enable
 #                 --batch-mtp, so both are needed)
+#   sm70table     STRATA_SM70_TABLE=1 (the three Volta decode kernels at once)
+#   fusedecode    STRATA_FUSE_DECODE=1 (decode GEMV/MoE fusions #1097)
+#   pfwmma        STRATA_PF_WMMA=1 (FP16 tensor-core prompt experts, sm_70)
+#   argmaxrows    STRATA_ARGMAX_ROWS_SM70=1 (multi-block greedy pick #2357)
+#   grnormfast    STRATA_GR_NORM_FAST=1 (register-split hyper-connection norm)
 #   vramreserve   --vram-reserve-mib 1024: the auto expert cache otherwise
 #                 leaves ~430 MiB free and the engine warns about #2065 paging
 #   expert_cache_max  SKIPPED: --expert-cache takes N or auto; "max" is not a
@@ -135,7 +145,7 @@ FORCE=0
 SELF_TEST=0
 CONTROL_CTX=1024
 
-ALL_VARIANTS="control nospec mtpoff spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial vramreserve expert_cache_max"
+ALL_VARIANTS="control basefull nospec mtpoff spec_pure kvbf16 kvfp16 kvres16k kvres64k batch8 groups1 mtpserial vramreserve expert_cache_max sm70table fusedecode pfwmma argmaxrows grnormfast kvq4_0 kvk8v4 pf4096 pf8192 pf16384 cpushare_auto batchmtp lookup4"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -199,7 +209,7 @@ fi
 
 variant_known() {
   case "$1" in
-    control|nospec|mtpoff|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|vramreserve|expert_cache_max) return 0 ;;
+    control|basefull|nospec|mtpoff|spec_pure|kvbf16|kvfp16|kvres16k|kvres64k|batch8|groups1|mtpserial|vramreserve|expert_cache_max|sm70table|fusedecode|pfwmma|argmaxrows|grnormfast|kvq4_0|kvk8v4|pf4096|pf8192|pf16384|cpushare_auto|batchmtp|lookup4) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -230,6 +240,12 @@ variant_set_flags() {
     kvres64k) printf '%s' "--set kv-resident=65536" ;;
     groups1) printf '%s' "--set batch-mtp=1 --set batch-groups=1" ;;
     vramreserve) printf '%s' "--set vram-reserve-mib=1024" ;;
+    kvq4_0) printf '%s' "--set kv=q4_0" ;;
+    kvk8v4) printf '%s' "--set kv=k8v4" ;;
+    pf4096) printf '%s' "--set prefill=4096" ;;
+    pf8192) printf '%s' "--set prefill=8192" ;;
+    pf16384) printf '%s' "--set prefill=16384" ;;
+    lookup4) printf '%s' "--set lookup-chain=4" ;;
     *) printf '' ;;
   esac
 }
@@ -248,6 +264,13 @@ variant_all_flags() { printf '%s %s' "$(variant_launch_flags "$1")" "$(variant_s
 variant_env_pairs() {
   case "$1" in
     mtpserial) printf '%s' "STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1" ;;
+    sm70table) printf '%s' "STRATA_SM70_TABLE=1" ;;
+    fusedecode) printf '%s' "STRATA_FUSE_DECODE=1" ;;
+    pfwmma) printf '%s' "STRATA_PF_WMMA=1" ;;
+    argmaxrows) printf '%s' "STRATA_ARGMAX_ROWS_SM70=1" ;;
+    grnormfast) printf '%s' "STRATA_GR_NORM_FAST=1" ;;
+    cpushare_auto) printf '%s' "STRATA_PREFILL_CPU_SHARE=auto" ;;
+    batchmtp) printf '%s' "STRATA_BATCH_MTP=1" ;;
     *) printf '' ;;
   esac
 }
@@ -266,7 +289,10 @@ variant_batches() {
 }
 # env keys that must never leak from one variant into the next
 clear_variant_env() {
-  unset STRATA_BATCH_MTP STRATA_BATCH_MTP_SERIAL 2>/dev/null || true
+  unset STRATA_BATCH_MTP STRATA_BATCH_MTP_SERIAL \
+        STRATA_SM70_TABLE STRATA_FUSE_DECODE STRATA_PF_WMMA \
+        STRATA_ARGMAX_ROWS_SM70 STRATA_GR_NORM_FAST \
+        STRATA_PREFILL_CPU_SHARE STRATA_BATCH_MTP 2>/dev/null || true
 }
 
 # ---- logging / CSV helpers ---------------------------------------------------

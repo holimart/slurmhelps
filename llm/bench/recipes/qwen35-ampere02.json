@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "qwen35-ampere02",
+  "description": "Qwen3.5-122B-A10B (AWQ 4-bit) smoke matrix on 2x A100 via stock vLLM.",
+  "backend": "vllm",
+  "runner": "measure",
+  "model": "qwen35-122b-a10b",
+  "experiment": "2026-10-23-smoke-2xa100",
+  "evidence": ["repo:llm/qwen35/experiments/data"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "ffa-preempt",
+    "nodelist": "ampere02",
+    "gres": "gpu:2",
+    "cpus": 12,
+    "mem": "220G",
+    "time": "04:00:00",
+    "gpus": "0,1",
+    "gpu_type": "2x A100 80GB"
+  },
+  "mode": "measure",
+  "options": {
+    "flavour": "qwen35-122b",
+    "base_url": "http://ampere02:8002",
+    "served_model": "qwen35-122b-a10b",
+    "contexts": "500 800",
+    "concurrency": "1 2 4 8",
+    "max_model_len": 262144
+  },
+  "output": {"root": "results", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 30,
+    "basis": "2026-10-23 smoke matrix; excludes the ~26 min model load"
+  },
+  "caveats": [
+    "This backend serves with stock vLLM 0.32; the 122B TP2 run needs --disable-custom-all-reduce or it spins in NCCL (serve-server.sh sets it).",
+    "The checkpoint is 75 GiB on Lustre and took ~26 min to load in the historical run; the smoke result excludes that.",
+    "Qwen3.5 declares 262144 native context; 700K is not supported without a separate long-context extension.",
+    "The adapter uses tests/serve_smoke.py because llm/qwen35 has no measure.sh; the matrix shape is the 2026-10-23 one.",
+    "Serving resources come from llm/qwen35/config-122b.json, not from this recipe."
+  ]
+}

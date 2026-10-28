@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "strata-knobs",
+  "description": "One-knob-at-a-time Strata engine sweep at 1k/4k/16k, concurrency 1 and 4, on one L40S.",
+  "backend": "strata",
+  "runner": "knobs",
+  "model": "iq3s",
+  "experiment": "2026-10-25-strata-smoke-matrix",
+  "evidence": ["strata-runs/2026-10-25-knobs"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-07",
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "11:30:00",
+    "gpus": "0",
+    "gpu_type": "1x L40S 48GB"
+  },
+  "mode": "knobs",
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "options": {
+    "contexts": "1024,4096,16384",
+    "batches": "1,4",
+    "variants": "all"
+  },
+  "budget_min": 240,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 31,
+    "basis": "2026-10-25 job 38236768 (10 variants, 31 min)"
+  },
+  "caveats": [
+    "Variants are one knob each; nospec and expert_cache_max are recorded as launch-fail/skipped-flag because engine 0.1.50 refuses them.",
+    "Every variant passes --mtp on explicitly (except mtpoff) because strata launch persists that choice in the shared installed config.",
+    "The vramreserve variant in attic/ is invalid: it inherited --mtp off from the previous variant. Use the redo, not the attic.",
+    "Only small contexts: 64k/131k, V100 and multi-GPU are separate recipes by design.",
+    "A variant's private data dir is seeded from the shared _strata-data tree; concurrent launches of the same pack can rewrite install/strata-<pack>.json."
+  ]
+}

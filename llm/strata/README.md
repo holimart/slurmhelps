@@ -18,6 +18,8 @@ knob-sweep.sbatch             Slurm entry point (execs knob-sweep.sh)
 knob-sweep.sh                 one-knob-at-a-time sweep at small contexts
 warm-cache.sbatch             Slurm entry point (execs warm-cache.sh)
 warm-cache.sh                 warm (cache-reuse) TTFT rerun of the baseline recipe
+chain-cache.sbatch            Slurm entry point (execs chain-cache.sh)
+chain-cache.sh                checkpoint chain: one growing prompt, one JSONL line per turn
 strata_probe.py               stdlib OpenAI-streaming probe (one JSONL cell per run;
                               --mode cold|warm, cold is the default)
 tests/stub_server.py          fake server for --self-test (127.0.0.1 only;
@@ -37,6 +39,9 @@ Coder   ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF
         IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf  29.6 GB
         + the same 00002 table (28.8 GB n-gram/PLE table)
         optional mmproj-Qwen3.8-Flash-Next-BF16.gguf (~0.9 GB; unused, --vision off)
+Q2_0    ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF (tag q2_0)
+        Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf  37.6 GB
+        + the same 00002 table (28.8 GB; hardlinked, never re-downloaded)
 ```
 
 The **Hub paths are prefixed** (`IQ3_S/`, `IQ1_M/`). A bare filename makes
@@ -67,14 +72,21 @@ llm/strata/bench-matrix.sh --self-test
 # 1. engine (login node, network only):
 llm/strata/install-engine.sh
 
-# 2. models (someone runs this; ~112 GB shared, resumable):
+# 2. models (someone runs this; ~150 GB shared, resumable):
 llm/strata/fetch-models.sh --only iq3s  --submit
 llm/strata/fetch-models.sh --only coder --submit
+llm/strata/fetch-models.sh --only q2_0   --submit   # 37.6 GB + hardlinked shard 2
 
 # 3. matrix (L40 default node shape is baked into the sbatch):
 sbatch --nice=100 llm/strata/strata-bench.sbatch
 sbatch --nice=100 llm/strata/strata-bench.sbatch --model coder \
   --contexts 1024,4096,16384,65536 --batches 1,2,4,8
+
+# exact cells (overrides --contexts/--batches) and a warm pass in the same job
+# (one saltless request + N identical repeats per slot; see strata_probe.py):
+sbatch --nice=100 llm/strata/strata-bench.sbatch --model iq3s \
+  --cells "1024:1,4096:1,65536:1,131072:1,262144:1" \
+  --warm-cells "65536:1,131072:1,262144:1" --warm-repeats 3
 
 # 2-GPU L40 node (the runner passes --gpu 0,1 and the engine layer-splits):
 sbatch --nice=100 --nodelist=gpuffaNN llm/strata/strata-bench.sbatch \
@@ -108,9 +120,12 @@ sbatch --nice=100 llm/strata/strata-bench.sbatch \
 
 V100 (sm_70, Volta) cannot run the CUDA 13 engine; `install-engine.sh`
 installs **both** engine variants and Strata's Control picks `cuda12`
-automatically from `nvidia-smi` archs — nothing to pass. Use only contexts
-`1024,4096,16384,65536` (docs/NVIDIA_V100.md); the probe now clamps a nominal
-65536 cell to `65536 − max_tokens − 128` real prompt tokens. Volta nodes are shared
+automatically from `nvidia-smi` archs — nothing to pass. The 1× V100-32G
+baseline (docs/NVIDIA_V100.md) used `1024,4096,16384,65536`; measured
+2026-10-26, a 2× V100-32G node serves 131072 and a 4× node serves **262144**
+(IQ3_S, `--kv int8 --kv-resident 32768`, C1/C2), so the context limit is the
+pack's 262,144-token window, not the card. The probe clamps a nominal cell to
+`window − max_tokens − 128` real prompt tokens. Volta nodes are shared
 (`volta01` 1×16 GB, `volta02/03` 2×16 GB, `volta04` 1×32 GB, `volta05`
 4×32 GB), so pick a node that fits the pack and give it memory:
 
@@ -196,7 +211,8 @@ sbatch --nice=100 --nodelist=uk-g6-07 --time=11:00:00 \
 ```
 
 Variants: `control` (baseline recipe, one 1024/C1 cell as a host/engine
-variance check), `nospec` (`--spec` removed — the engine refuses on a native IQ
+variance check), `basefull` (the same baseline recipe on the whole ladder —
+the control for kernel deltas), `nospec` (`--spec` removed — the engine refuses on a native IQ
 pack, so it records `launch-fail` with `it needs --spec T (T >= 2)`),
 `mtpoff` (`--mtp off`, the workable no-drafts arm), `spec_pure` (`--spec 4
 --spec-min-p 0`), `kvfp16` (`--kv fp16`), `kvres16k`/`kvres64k`
@@ -204,9 +220,16 @@ pack, so it records `launch-fail` with `it needs --spec T (T >= 2)`),
 `groups1` (`--batch-mtp --batch-groups 1`), `mtpserial`
 (`STRATA_BATCH_MTP=1 STRATA_BATCH_MTP_SERIAL=1`), `vramreserve`
 (`--vram-reserve-mib 1024`, since the auto expert cache otherwise leaves ~430
-MiB free and the engine warns about #2065 paging). `kvbf16` and
+MiB free and the engine warns about #2065 paging), and the opt-in Volta
+kernels `sm70table` (`STRATA_SM70_TABLE=1`), `fusedecode`
+(`STRATA_FUSE_DECODE=1`), `pfwmma` (`STRATA_PF_WMMA=1`), `argmaxrows`
+(`STRATA_ARGMAX_ROWS_SM70=1`), `grnormfast` (`STRATA_GR_NORM_FAST=1`).
+`kvbf16` and
 `expert_cache_max` are recorded as `skipped-flag`: engine 0.1.50 has no
 `--kv bf16` (only fp16/int8/q4_0/k8v4) and `--expert-cache` has no `max` mode.
+On 2026-10-26 the Volta sweep measured `sm70table` +7.0/+5.9/+6.6 % decode at
+1k/4k/16k C1, `pfwmma` +2.2 % aggregate, the other three at or inside noise
+(`fusedecode` invisible end to end).
 
 The pack is staged to node-local scratch **once** per job; each variant seeds a
 private `--data-dir` from `_strata-data` (hardlinked read-only trees, copied
@@ -272,6 +295,39 @@ at 64k; 8 GiB/4 slots held four 64k conversations) and warm TTFT was
 0.057–0.150 s on L40 (98× at 64k) and 0.268–0.543 s on V100 (20× at 16k).
 Details in `experiments/2026-10-25-strata-smoke-matrix.md` and
 `/work/ffa/holecem/strata-runs/2026-10-25-warm/NOTES.md`.
+
+## Checkpoint chain (prefix growth)
+
+`chain-cache.sh` measures the case an agent loop has: **one conversation whose
+prompt grows**. It uses the canonical probe `llm/bench/probe.py --mode chain`
+(the upstream `strata_probe.py` here is frozen at the pre-chain copy), one
+fixed salt, one sequential slot, and a stop ladder. Each turn's prompt is the
+previous prompt plus appended filler, so turns after the first should reuse the
+previous checkpoint and prefill only the delta. One JSONL line is written per
+turn with `stop`, `prev_stop`, `prompt_tokens`, engine `reused_tokens`,
+`reuse_fraction`, `ttft_s`, `prefill_s`, `prefill_delta_tokens`, strict
+`decode_s`/`tpot_ms`/`decode_tok_s_strict`, `decode_tok_s`, `aggregate_tok_s`
+and `status`; `summary.csv` gets one row per turn.
+
+```bash
+llm/strata/chain-cache.sh --plan --model iq3s
+llm/strata/chain-cache.sh --self-test      # stub: prefix growth + reuse + strict timing
+
+sbatch --nice=100 --nodelist=uk-g6-02 llm/strata/chain-cache.sbatch \
+  --model iq3s --node uk-g6-02 --max-context 262144 \
+  --stops 1024,100000,200000,262144 --tokens-per-turn 512 \
+  --chain-last-repeats 1 --outdir /work/ffa/holecem/strata-runs/2026-10-26-chain
+```
+
+Measured 2026-10-26 (IQ3_S + Coder, 1× L40S): checkpoint reuse engaged at
+**16,384-token granularity** — the 200k and 262k turns reused 98,304
+(= 6 × 16,384) and 196,608 (= 12 × 16,384) tokens, while the 100k turn
+reused 0 because the 1k seed is smaller than one checkpoint block. An exact repeat at
+261k reused 261,050 = prompt−5 in 0.415 s. TTFT fell from cold 48.6 s → 25.9 s
+at 200k and 63.8 s → 17.7 s at 261k; strict decode stayed 116–129 tok/s
+(TPOT 7.7–8.7 ms). Details, cold comparison and caveats:
+`experiments/2026-10-26-chain.md` and
+`/work/ffa/holecem/strata-runs/2026-10-26-chain/NOTES.md`.
 
 ## Gotchas
 

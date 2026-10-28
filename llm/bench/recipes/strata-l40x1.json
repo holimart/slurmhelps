@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "name": "strata-l40x1",
+  "description": "Strata cold matrix on one L40S: IQ3_S at contexts 1k/4k/16k/64k/128k and concurrency 1/2/4.",
+  "backend": "strata",
+  "runner": "matrix",
+  "model": "iq3s",
+  "experiment": "2026-10-25-strata-smoke-matrix",
+  "evidence": ["strata-runs/2026-10-25-l40x1"],
+  "hardware": {
+    "kind": "cluster",
+    "partition": "gpu-ffa",
+    "nodelist": "uk-g6-05",
+    "gres": "gpu:1",
+    "cpus": 16,
+    "mem": "256G",
+    "time": "11:30:00",
+    "gpus": "0",
+    "gpu_type": "1x L40S 48GB"
+  },
+  "mode": "cold",
+  "cells": [
+    "1024:1", "1024:2", "1024:4",
+    "4096:1", "4096:2", "4096:4",
+    "16384:1", "16384:2", "16384:4",
+    "65536:1", "65536:2", "65536:4",
+    "131072:1", "131072:2", "131072:4"
+  ],
+  "probe": {
+    "max_context": 131072,
+    "max_tokens": 128,
+    "requests_per_slot": 3,
+    "pad_safety": 128
+  },
+  "budget_min": 420,
+  "output": {"root": "strata_runs", "subdir": "{name}-{stamp}"},
+  "estimate": {
+    "wall_minutes": 75,
+    "basis": "2026-10-25 l40x1 matrix wall (both packs); one pack is roughly half"
+  },
+  "caveats": [
+    "The 2026-10-25 matrix used the pre-calibration probe: nominal 131072 cells were rejected at ~149k real tokens. The current probe clamps and records calibration, so reruns are not byte-comparable at the top cell.",
+    "Prompts are salted, so all cells are cold (reused=0); warm TTFT is the strata-warm recipe.",
+    "The drafter was loaded in the historical run; a low decode number without 'draft layer loaded' in the engine log is invalid.",
+    "/tmp on the node must hold ~86 GiB for the IQ3_S staging copy, or pass COPY_MODELS=0.",
+    "decode_tok_s_p50 is per-stream; aggregate_tok_s includes prefill and is the comparable number at C>1."
+  ]
+}
