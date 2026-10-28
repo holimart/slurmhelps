@@ -1,0 +1,30 @@
+{
+  "serving": {
+    "model": "thinkingcap-flash-next",
+    "engine": "vllm-stock",
+    "gpus": 2,
+    "gpu_type": "A100",
+    "partition": "ffa-preempt",
+    "account": "ffa",
+    "cpus": 8,
+    "mem": "220G",
+    "time": "36:00:00",
+    "requeue": true,
+    "nice": 100,
+    "exclusive": false,
+    "max_model_len": 262144,
+    "max_num_seqs": 2,
+    "max_num_batched_tokens": 4096,
+    "startup_timeout_s": 14400,
+    "gpu_memory_utilization": 0.95,
+    "kv_cache_dtype": "bfloat16",
+    "block_size": 64,
+    "host_kv_ram_gib": 0,
+    "queue_limit": 16,
+    "coalesce_ms": 0,
+    "port": 8011,
+    "api": {"bind": "127.0.0.1", "key_env": "SLURMHELPS_API_KEY"},
+    "tunnel": {"relay_port": 18011},
+    "spill": {"enabled": false, "idle_seconds": 600, "mode": "state-only"}
+  }
+}

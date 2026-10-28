@@ -53,6 +53,21 @@
       "status": "measured + OpenCode 4/4",
       "notes": "FP4/PLE checkpoint; requires community Blackwell vLLM container; 262K native, 1M only with YaRN."
     },
+    "thinkingcap-flash-next": {
+      "display_name": "ThinkingCap Qwen3.8-Flash-Next NVFP4 (A100)",
+      "family": "qwen3.8-thinkingcap",
+      "config": "llm/thinkingcap-flash-next/config-a100.json",
+      "launcher": "llm/thinkingcap-flash-next/serve.sh",
+      "backend": "llm/thinkingcap-flash-next/serve-server.sh",
+      "engine": "vllm-stock",
+      "gpus": "2x A100 80GB",
+      "context": 262144,
+      "endpoint": "http://127.0.0.1:8011/v1",
+      "opencode_provider": "slurmhelps-thinkingcap",
+      "opencode_model": "thinkingcap-flash-next",
+      "status": "experimental; unmeasured on A100",
+      "notes": "ThinkingCap Flash-Next NVFP4 W4A16 (~132 GB); A100 uses Marlin FP4 fallback; 262K context and max_num_seqs=2 leave little KV headroom."
+    },
     "glm53-reap50": {
       "display_name": "GLM-5.3-Flash REAP50",
       "family": "glm5",

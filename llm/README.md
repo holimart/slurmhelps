@@ -9,6 +9,7 @@ Defaults:
 | Target | Model |
 |---|---|
 | A100 | `qwen35-122b-a10b` |
+| A100 ThinkingCap (experimental) | `thinkingcap-flash-next` |
 | Blackwell | `qwen38-flash-next` |
 | GLM/700K | `glm53-reap50` |
 
@@ -54,6 +55,24 @@ The expensive parts are deliberately reused:
   copies only the finished SIF to `/work`; never extract the layer tree on
   Lustre.
 
+## ThinkingCap Qwen3.8-Flash-Next on A100 (experimental)
+
+```bash
+llm/thinkingcap-flash-next/pull-model.sh   # ~132 GB, pinned revision
+llm/thinkingcap-flash-next/serve.sh up --yes
+llm/thinkingcap-flash-next/serve.sh status --json
+llm/thinkingcap-flash-next/serve.sh wait
+llm/thinkingcap-flash-next/serve.sh endpoint
+llm/thinkingcap-flash-next/serve.sh down
+```
+
+It runs BottleCap AI's `ThinkingCap-Qwen3.8-Flash-Next-NVFP4` on
+`ampere02` (2× A100 80 GB), TP2, 262K context, `max_num_seqs=2`, BF16 KV.
+A100 has no native FP4 tensor cores; vLLM uses the Marlin W4A16 fallback.
+This is an experimental A100 deployment, not a BW6000 throughput claim.
+Details, the tunnel command and the GGUF fallback:
+[`thinkingcap-flash-next/README.md`](thinkingcap-flash-next/README.md).
+
 ## Qwen3.5 on A100
 
 ```bash
@@ -91,6 +110,7 @@ OpenCode provider examples:
 
 - [`examples/opencode-qwen35-122b.json`](../examples/opencode-qwen35-122b.json)
 - [`examples/opencode-qwen38-flash-next.json`](../examples/opencode-qwen38-flash-next.json)
+- [`examples/opencode-thinkingcap-flash-next.json`](../examples/opencode-thinkingcap-flash-next.json)
 - [`examples/opencode-serve.json`](../examples/opencode-serve.json)
 
 The API key name is `SLURMHELPS_API_KEY`; no credential is stored in the repo.
