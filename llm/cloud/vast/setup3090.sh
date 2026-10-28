@@ -37,33 +37,53 @@ STRATA_COMPONENTS_DIR=$STRATA_ROOT/components "$STRATA_ROOT/bin/strata" --versio
 STRATA_COMPONENTS_DIR=$STRATA_ROOT/components "$STRATA_ROOT/bin/strata" components engine 2>&1 | tee $RESULTS_DIR/strata-components.txt || true
 
 export HF_HUB_DISABLE_TELEMETRY=1
+export HF_XET_HIGH_PERFORMANCE=${HF_XET_HIGH_PERFORMANCE:-1}
+HF_WORKERS=${HF_WORKERS:-4}
 REV1=ed59f92082b1e93c0e96d60a8b11aab089b52f09   # IQ3_S / Q2_0 repo, 2026-09-29
 REV2=5348543e0147355ac9cbcb031184a3546350988e   # Coder repo, 2026-09-29
 REPO1=ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF
 REPO2=ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF
 
+# A host whose HF link is slow can be seeded from a local mirror; skip a pack
+# whose pinned files are already complete instead of re-downloading it.
+size_is() { [ -f "$1" ] && [ "$(stat -c %s "$1" 2>/dev/null)" = "$2" ]; }
 need_table=0
 for p in $FETCH; do
   case "$p" in
     iq3s)
-      log "downloading IQ3_S shard1 + table (pinned ${REV1:0:8})"
-      hf download "$REPO1" \
-        IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf \
-        IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf \
-        --revision "$REV1" --local-dir "$DL" --max-workers 4 || log "ERROR: iq3s download rc=$?"
+      if size_is "$DL/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf" 54817524224 \
+         && size_is "$DL/IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf" 28800138432; then
+        log "IQ3_S already present (pinned sizes); skipping download"
+      else
+        log "downloading IQ3_S shard1 + table (pinned ${REV1:0:8}, workers $HF_WORKERS)"
+        hf download "$REPO1" \
+          IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf \
+          IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf \
+          --revision "$REV1" --local-dir "$DL" --max-workers "$HF_WORKERS" || log "ERROR: iq3s download rc=$?"
+      fi
       need_table=1 ;;
     coder)
-      log "downloading Coder IQ1_M shard1 (pinned ${REV2:0:8})"
-      hf download "$REPO2" \
-        IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf \
-        --revision "$REV2" --local-dir "$DL" --max-workers 2 || log "ERROR: coder download rc=$?"
+      if size_is "$DL/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf" 29608446496 \
+         && size_is "$DL/IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00002-of-00002.gguf" 28800138432; then
+        log "Coder already present; skipping download"
+      else
+        log "downloading Coder IQ1_M shard1 (pinned ${REV2:0:8}, workers $HF_WORKERS)"
+        hf download "$REPO2" \
+          IQ1_M/Qwen3.8-Flash-Next-GSQ-RCO-IQ1_M-00001-of-00002.gguf \
+          --revision "$REV2" --local-dir "$DL" --max-workers "$HF_WORKERS" || log "ERROR: coder download rc=$?"
+      fi
       need_table=1 ;;
     q2_0)
-      log "downloading Q2_0 shard1 + table (pinned ${REV1:0:8})"
-      hf download "$REPO1" \
-        Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf \
-        Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf \
-        --revision "$REV1" --local-dir "$DL" --max-workers 4 || log "ERROR: q2_0 download rc=$?"
+      if size_is "$DL/Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf" 37623740192 \
+         && size_is "$DL/Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf" 28800138432; then
+        log "Q2_0 already present; skipping download"
+      else
+        log "downloading Q2_0 shard1 + table (pinned ${REV1:0:8}, workers $HF_WORKERS)"
+        hf download "$REPO1" \
+          Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00001-of-00002.gguf \
+          Q2_0/Qwen3.8-Flash-Next-GSQ-RCO-Q2_0-00002-of-00002.gguf \
+          --revision "$REV1" --local-dir "$DL" --max-workers "$HF_WORKERS" || log "ERROR: q2_0 download rc=$?"
+      fi
       need_table=1 ;;
     *) log "ERROR: unknown pack $p" ;;
   esac

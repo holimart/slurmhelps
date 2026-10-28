@@ -566,9 +566,12 @@ def cmd_run(args):
         remote_script = (args.remote_dir or "/root").rstrip("/") + "/" + os.path.basename(args.script)
     else:
         remote_script = args.script or "/root/run-matrix.sh"
+    assigns = []
+    for item in (args.set_env or []):
+        key, _, value = item.partition("=")
+        assigns.append("%s=%s" % (key, shlex.quote(value)))
     inner = "cd /root && %s bash %s" % (
-        " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in (args.set_env or [])),
-        shlex.quote(remote_script))
+        " ".join(assigns), shlex.quote(remote_script))
     if args.background:
         inner = "setsid nohup bash -c %s >/root/results/run.log 2>&1 < /dev/null & echo pid=$!" \
                 % shlex.quote(inner)

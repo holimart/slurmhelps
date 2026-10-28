@@ -53,7 +53,7 @@
     "basis": "113.2 GB download at $2.67/TB ($0.30) + 3 h at $0.176/h ($0.53) + disk; the 2026-10-25 host at $53.33/TB cost $3.80 for 73 GB and is excluded by max_down_cost_per_tb"
   },
   "caveats": [
-    "C16 is accepted by the engine (engine_max_batch=16, saturation at C8) but the 2.88x aggregate multiplier is a projection from cheap_compare.csv, not a 3090 measurement. This run measures it.",
+    "The installed engine (0.1.52) rejects --parallel > 8. C16 is therefore measured as 16 concurrent clients against 8 batch slots; the 2.88x aggregate multiplier was a projection from cheap_compare.csv, not a 3090 measurement.",
     "Memory is tight: 24 GB VRAM + 60-64 GB host = 84-88 GB against IQ3_S at 83.6 GB; KV at C16 is 51 MB at 4K and 410 MB at 32K. Q2_0 (66 GB) is the fallback if IQ3_S OOMs.",
     "Always filter Vast offers on internet_down_cost_per_tb (<= $5/TB) and driver >= 580.65; the cheapest Quebec 3090s run driver 570.181 and are unusable.",
     "No credit is consumed until the run is launched; the account must be recharged first (the previous 3090 attempt ended at -$0.78).",
