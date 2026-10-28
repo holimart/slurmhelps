@@ -62,7 +62,8 @@ python3 llm/cloud/vast/vast.py stage --instance <ID> --recipe-file llm/bench/rec
 # 4) run the C16 matrix (remote logs stay on the host; pull at the end)
 python3 llm/cloud/vast/vast.py run --instance <ID> --script /root/run-matrix2.sh \
   --set 'CTXS=4096 16384 32768' --set 'BATCHES=1 2 4 8 16' --set 'MAXTOK=512' \
-  --set 'PACKS=iq3s q2_0' --set 'RPS=3' --set 'SAFETY=2048' --set 'DEADLINE=<epoch>' \
+  --set 'MAXCTX=32768' --set 'PACKS=iq3s q2_0' --set 'RPS=3' --set 'SAFETY=2048' \
+  --set 'PARALLEL=16' --set 'DEADLINE=<epoch>' \
   --background --yes
 
 # 5) pull summaries, then ALWAYS destroy
@@ -70,6 +71,10 @@ python3 llm/cloud/vast/vast.py pull --instance <ID> \
   --outdir /work/ffa/holecem/strata-runs/vast-3090-c16-<stamp> --yes
 python3 llm/cloud/vast/vast.py destroy --instance <ID> --yes
 ```
+
+`run-matrix2.sh` now sets `--parallel` from `PARALLEL` (auto = max(BATCHES)); the
+old hardcoded `--parallel 4` would have made every C8/C16 cell a C4 cell. Pass
+`PARALLEL=16` explicitly or rely on the auto value.
 
 Rules: never tail logs on the remote host or on Lustre; poll the instance
 status; pull only small summaries; destroy even on failure.
