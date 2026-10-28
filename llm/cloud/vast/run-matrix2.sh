@@ -110,6 +110,8 @@ run_pack() { # pack
   case "$pack" in
     iq3s)  dir=$MODELS/iq3s ;;
     coder) dir=$MODELS/coder ;;
+    q2_0)  dir=$MODELS/q2_0 ;;
+    *) log "unknown pack $pack"; return 1 ;;
   esac
   mkdir -p "$OUT/$pack"
   cells="$OUT/$pack/cells.jsonl"; csv="$OUT/$pack/summary.csv"

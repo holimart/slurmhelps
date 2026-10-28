@@ -29,6 +29,9 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_API = "https://console.vast.ai/api/v0"
+# Vast deprecated GET /api/v0/instances/ (HTTP 410, 2026-10-28).  Instance
+# listing lives on v1; asks/delete still answer on v0.
+INSTANCES_API = "https://console.vast.ai/api/v1"
 DEFAULT_IMAGE = "vastai/base-image:cuda-13.0.1-auto"
 DEFAULT_MAX_DOWN_TB = 5.0
 DEFAULT_MIN_DRIVER = "580.65"
@@ -66,6 +69,16 @@ def api(method, path, body=None, args=None, timeout=30):
         return json.loads(raw)
     except ValueError:
         raise VastError("%s %s -> non-JSON response: %r" % (method, url, raw[:200]))
+
+
+def api_v1(method, path, body=None, args=None, timeout=30):
+    """Call the v1 API (instance listing moved there on 2026-10-28)."""
+    if args is None:
+        proxy = argparse.Namespace(api=INSTANCES_API, api_key=None)
+    else:
+        proxy = argparse.Namespace(**vars(args))
+        proxy.api = os.environ.get("VAST_API_V1_URL") or INSTANCES_API
+    return api(method, path, body=body, args=proxy, timeout=timeout)
 
 
 def _ver(text):
@@ -390,7 +403,7 @@ def _now():
 
 
 def cmd_list(args):
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else data
     rows = rows or []
     out = []
@@ -422,7 +435,7 @@ def wait_running(args, instance_id, timeout=900):
     deadline = time.time() + float(timeout)
     last = None
     while time.time() < deadline:
-        data = api("GET", "/instances/", args=args, timeout=args.timeout)
+        data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
         rows = data.get("instances") if isinstance(data, dict) else (data or [])
         inst = next((x for x in rows if str(x.get("id")) == str(instance_id)), None)
         if inst:
@@ -456,7 +469,7 @@ def _instance_ssh(args):
         return host, int(port or 22)
     if not args.instance:
         raise VastError("need --ssh host:port or --instance ID")
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else (data or [])
     inst = next((x for x in rows if str(x.get("id")) == str(args.instance)), None)
     if not inst:
@@ -471,7 +484,7 @@ def _instance_ssh(args):
 def cmd_upload(args):
     host, port = _instance_ssh(args)
     if args.instance and not args.ssh:
-        data = api("GET", "/instances/", args=args, timeout=args.timeout)
+        data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
         rows = data.get("instances") if isinstance(data, dict) else (data or [])
         inst = next((x for x in rows if str(x.get("id")) == str(args.instance)), {})
         host = inst.get("ssh_host") or inst.get("public_ipaddr") or host
@@ -491,20 +504,31 @@ def cmd_stage(args):
     host, port = (args.ssh.partition(":")[0], int(args.ssh.partition(":")[2] or 22)) \
         if args.ssh else _instance_ssh(args)
     cloud_dir = Path(__file__).resolve().parent
-    files = ["setup.sh", "install-engine.sh", "strata_probe.py",
+    # The canonical probe (llm/strata/strata_probe.py) carries the two-point
+    # chars/token + chat-template intercept calibration.  The cloud copy went
+    # stale, so stage the canonical file under the remote name the runner uses.
+    canonical_probe = cloud_dir.parents[1] / "strata" / "strata_probe.py"
+    files = ["setup.sh", "install-engine.sh",
+             str(canonical_probe) if canonical_probe.exists() else "strata_probe.py",
              "run-matrix.sh", "run-matrix2.sh"]
+    packs = args.packs
+    recipe_setup = None
     if args.recipe_file:
         rec = recipe_options(args.recipe_file)
-        packs = rec.get("options", {}).get("packs")
-        if packs:
+        recipe_packs = rec.get("options", {}).get("packs")
+        recipe_setup = rec.get("options", {}).get("setup_script")
+        if recipe_packs:
+            if not packs:
+                packs = recipe_packs
+        if recipe_packs or recipe_setup:
             files.append("setup3090.sh")
-    script = args.script or "setup.sh"
+    script = args.script or recipe_setup or "setup.sh"
     remote = args.remote_dir or "/root"
     ssh = ssh_argv(args, host, port)
     rsync = ["rsync", "-az", "-e", " ".join(shlex.quote(x) for x in ssh[:-1] + ["root@%s" % host])]
     rsync += [str(cloud_dir / f) for f in files] + ["root@%s:%s/" % (host, remote)]
     run = ssh + ["cd %s && PACKS_TO_FETCH=%s STRATA_ROOT=%s bash %s"
-                 % (shlex.quote(remote), shlex.quote(str(args.packs or "iq3s coder")),
+                 % (shlex.quote(remote), shlex.quote(str(packs or "iq3s coder")),
                     shlex.quote(args.strata_root), shlex.quote(script))]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in rsync))
@@ -573,7 +597,7 @@ def cmd_destroy(args):
         raise VastError("refusing to destroy without --yes")
     resp = api("DELETE", "/instances/%s/" % args.instance, args=args, timeout=args.timeout)
     time.sleep(2)
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else (data or [])
     remaining = [x.get("id") for x in rows if str(x.get("id")) == str(args.instance)]
     out = {"instance": args.instance, "response": resp, "still_listed": remaining,
