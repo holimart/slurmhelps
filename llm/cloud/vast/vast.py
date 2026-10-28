@@ -29,6 +29,9 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_API = "https://console.vast.ai/api/v0"
+# Vast deprecated GET /api/v0/instances/ (HTTP 410, 2026-10-28).  Instance
+# listing lives on v1; asks/delete still answer on v0.
+INSTANCES_API = "https://console.vast.ai/api/v1"
 DEFAULT_IMAGE = "vastai/base-image:cuda-13.0.1-auto"
 DEFAULT_MAX_DOWN_TB = 5.0
 DEFAULT_MIN_DRIVER = "580.65"
@@ -66,6 +69,16 @@ def api(method, path, body=None, args=None, timeout=30):
         return json.loads(raw)
     except ValueError:
         raise VastError("%s %s -> non-JSON response: %r" % (method, url, raw[:200]))
+
+
+def api_v1(method, path, body=None, args=None, timeout=30):
+    """Call the v1 API (instance listing moved there on 2026-10-28)."""
+    if args is None:
+        proxy = argparse.Namespace(api=INSTANCES_API, api_key=None)
+    else:
+        proxy = argparse.Namespace(**vars(args))
+        proxy.api = os.environ.get("VAST_API_V1_URL") or INSTANCES_API
+    return api(method, path, body=body, args=proxy, timeout=timeout)
 
 
 def _ver(text):
@@ -110,6 +123,12 @@ def offer_verdict(offer, opts):
     want_n = int(opts.get("num_gpus") or 1)
     if int(offer.get("num_gpus") or 0) != want_n:
         reasons.append("num_gpus %s != %s" % (offer.get("num_gpus"), want_n))
+    # A "1x RTX 3090" offer can still be a fractional slice of the card
+    # (gpu_frac 0.25 here); benchmarking on a shared slice is meaningless.
+    min_frac = float(opts.get("min_gpu_frac") or 1.0)
+    frac = float(offer.get("gpu_frac") or 1.0)
+    if frac < min_frac:
+        reasons.append("gpu_frac %.3f < %.3f (fractional GPU)" % (frac, min_frac))
     ram_gb = float(offer.get("cpu_ram") or 0) / 1024.0
     if opts.get("min_ram_gb") and ram_gb < float(opts["min_ram_gb"]):
         reasons.append("host RAM %.0f GB < %s GB" % (ram_gb, opts["min_ram_gb"]))
@@ -150,6 +169,7 @@ def annotate_offer(offer, model_gb, hours):
         "id": offer.get("id"),
         "gpu_name": offer.get("gpu_name"),
         "num_gpus": offer.get("num_gpus"),
+        "gpu_frac": offer.get("gpu_frac"),
         "dph_total": dph,
         "driver_version": offer.get("driver_version"),
         "cuda_max_good": offer.get("cuda_max_good"),
@@ -241,12 +261,13 @@ def _opts_from(args):
         "max_down_cost_per_tb": args.max_down_cost_per_tb,
         "min_reliability": args.min_reliability,
         "max_dph": args.max_dph,
+        "min_gpu_frac": getattr(args, "min_gpu_frac", None),
     }
     if args.recipe_file:
         rec = recipe_options(args.recipe_file)
         for key in ("gpu_name", "num_gpus", "min_ram_gb", "min_disk_gb",
                     "min_driver", "max_dph", "max_down_cost_per_tb",
-                    "min_reliability"):
+                    "min_reliability", "min_gpu_frac"):
             if opts.get(key) in (None, False) and rec.get(key) is not None:
                 opts[key] = rec[key]
         opts["_recipe"] = rec
@@ -390,7 +411,7 @@ def _now():
 
 
 def cmd_list(args):
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else data
     rows = rows or []
     out = []
@@ -422,7 +443,7 @@ def wait_running(args, instance_id, timeout=900):
     deadline = time.time() + float(timeout)
     last = None
     while time.time() < deadline:
-        data = api("GET", "/instances/", args=args, timeout=args.timeout)
+        data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
         rows = data.get("instances") if isinstance(data, dict) else (data or [])
         inst = next((x for x in rows if str(x.get("id")) == str(instance_id)), None)
         if inst:
@@ -456,7 +477,7 @@ def _instance_ssh(args):
         return host, int(port or 22)
     if not args.instance:
         raise VastError("need --ssh host:port or --instance ID")
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else (data or [])
     inst = next((x for x in rows if str(x.get("id")) == str(args.instance)), None)
     if not inst:
@@ -471,13 +492,13 @@ def _instance_ssh(args):
 def cmd_upload(args):
     host, port = _instance_ssh(args)
     if args.instance and not args.ssh:
-        data = api("GET", "/instances/", args=args, timeout=args.timeout)
+        data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
         rows = data.get("instances") if isinstance(data, dict) else (data or [])
         inst = next((x for x in rows if str(x.get("id")) == str(args.instance)), {})
         host = inst.get("ssh_host") or inst.get("public_ipaddr") or host
         port = inst.get("ssh_port") or port
     cmd = ["rsync", "-az", "--no-owner", "--no-group",
-           "-e", " ".join(shlex.quote(x) for x in ssh_argv(args, host, port)[:-1] + ["root@%s" % host]),
+           "-e", " ".join(shlex.quote(x) for x in ssh_argv(args, host, port)[:-1]),
            args.source, "root@%s:%s" % (host, args.dest)]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in cmd))
@@ -491,20 +512,31 @@ def cmd_stage(args):
     host, port = (args.ssh.partition(":")[0], int(args.ssh.partition(":")[2] or 22)) \
         if args.ssh else _instance_ssh(args)
     cloud_dir = Path(__file__).resolve().parent
-    files = ["setup.sh", "install-engine.sh", "strata_probe.py",
+    # The canonical probe (llm/strata/strata_probe.py) carries the two-point
+    # chars/token + chat-template intercept calibration.  The cloud copy went
+    # stale, so stage the canonical file under the remote name the runner uses.
+    canonical_probe = cloud_dir.parents[1] / "strata" / "strata_probe.py"
+    files = ["setup.sh", "install-engine.sh",
+             str(canonical_probe) if canonical_probe.exists() else "strata_probe.py",
              "run-matrix.sh", "run-matrix2.sh"]
+    packs = args.packs
+    recipe_setup = None
     if args.recipe_file:
         rec = recipe_options(args.recipe_file)
-        packs = rec.get("options", {}).get("packs")
-        if packs:
+        recipe_packs = rec.get("options", {}).get("packs")
+        recipe_setup = rec.get("options", {}).get("setup_script")
+        if recipe_packs:
+            if not packs:
+                packs = recipe_packs
+        if recipe_packs or recipe_setup:
             files.append("setup3090.sh")
-    script = args.script or "setup.sh"
+    script = args.script or recipe_setup or "setup.sh"
     remote = args.remote_dir or "/root"
     ssh = ssh_argv(args, host, port)
-    rsync = ["rsync", "-az", "-e", " ".join(shlex.quote(x) for x in ssh[:-1] + ["root@%s" % host])]
+    rsync = ["rsync", "-az", "-e", " ".join(shlex.quote(x) for x in ssh[:-1])]
     rsync += [str(cloud_dir / f) for f in files] + ["root@%s:%s/" % (host, remote)]
     run = ssh + ["cd %s && PACKS_TO_FETCH=%s STRATA_ROOT=%s bash %s"
-                 % (shlex.quote(remote), shlex.quote(str(args.packs or "iq3s coder")),
+                 % (shlex.quote(remote), shlex.quote(str(packs or "iq3s coder")),
                     shlex.quote(args.strata_root), shlex.quote(script))]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in rsync))
@@ -534,9 +566,12 @@ def cmd_run(args):
         remote_script = (args.remote_dir or "/root").rstrip("/") + "/" + os.path.basename(args.script)
     else:
         remote_script = args.script or "/root/run-matrix.sh"
+    assigns = []
+    for item in (args.set_env or []):
+        key, _, value = item.partition("=")
+        assigns.append("%s=%s" % (key, shlex.quote(value)))
     inner = "cd /root && %s bash %s" % (
-        " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in (args.set_env or [])),
-        shlex.quote(remote_script))
+        " ".join(assigns), shlex.quote(remote_script))
     if args.background:
         inner = "setsid nohup bash -c %s >/root/results/run.log 2>&1 < /dev/null & echo pid=$!" \
                 % shlex.quote(inner)
@@ -554,7 +589,7 @@ def cmd_pull(args):
     ssh = ssh_argv(args, host, port)
     dest = Path(args.dest or "vast-results").expanduser()
     cmd = ["rsync", "-az", "--no-owner", "--no-group",
-           "-e", " ".join(shlex.quote(x) for x in ssh[:-1] + ["root@%s" % host]),
+           "-e", " ".join(shlex.quote(x) for x in ssh[:-1]),
            "root@%s:%s" % (host, args.remote or "/root/results/"), str(dest) + "/"]
     if args.dry_run:
         print(" ".join(shlex.quote(x) for x in cmd))
@@ -573,7 +608,7 @@ def cmd_destroy(args):
         raise VastError("refusing to destroy without --yes")
     resp = api("DELETE", "/instances/%s/" % args.instance, args=args, timeout=args.timeout)
     time.sleep(2)
-    data = api("GET", "/instances/", args=args, timeout=args.timeout)
+    data = api_v1("GET", "/instances/", args=args, timeout=args.timeout)
     rows = data.get("instances") if isinstance(data, dict) else (data or [])
     remaining = [x.get("id") for x in rows if str(x.get("id")) == str(args.instance)]
     out = {"instance": args.instance, "response": resp, "still_listed": remaining,
@@ -602,6 +637,7 @@ def build_parser():
         sp.add_argument("--min-cuda", default=None)
         sp.add_argument("--max-down-cost-tb", dest="max_down_cost_per_tb", type=float)
         sp.add_argument("--min-reliability", type=float)
+        sp.add_argument("--min-gpu-frac", type=float, default=None)
         sp.add_argument("--max-dph", type=float)
         sp.add_argument("--model-gb", type=float)
         sp.add_argument("--hours", type=float)

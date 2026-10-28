@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from slurmhelps.serving.config import MAX_MODEL_LEN_LIMIT, ServingConfig
@@ -142,6 +145,23 @@ def test_slurm_args_are_preemptible_by_default():
     assert "--requeue" in args
     assert "--exclusive" not in args
     assert args[args.index("--nice") + 1] == "100"
+
+
+def test_thinkingcap_a100_config_is_valid():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "llm"
+        / "thinkingcap-flash-next"
+        / "config-a100.json"
+    )
+    cfg = ServingConfig.from_mapping(json.loads(path.read_text(encoding="utf-8")))
+    assert cfg.model == "thinkingcap-flash-next"
+    assert (cfg.gpus, cfg.gpu_type, cfg.partition) == (2, "A100", "ffa-preempt")
+    assert cfg.nice == 100
+    assert cfg.max_model_len == 262144
+    assert cfg.max_num_seqs == 2
+    assert cfg.port == 8011
+    assert cfg.kv_cache_dtype == "bfloat16"
 
 
 def test_sbatch_script_has_no_secret_and_renders_command():

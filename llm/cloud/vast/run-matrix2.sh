@@ -12,6 +12,7 @@ OUT=${OUT:-/root/results}
 PROBE=${PROBE:-/root/strata_probe.py}
 CTXS=${CTXS:-"1024 4096 16384 65536 131072 262144"}
 BATCHES=${BATCHES:-"1 2 4"}
+PARALLEL=${PARALLEL:-0}          # 0 = auto: max(BATCHES), so C16 really gets 16 slots
 MAXCTX=${MAXCTX:-262144}
 MAXTOK=${MAXTOK:-128}
 RPS=${RPS:-3}
@@ -65,11 +66,15 @@ launch_server() { # pack model_dir logfile
   export STRATA_PROFILE_DIR="$OUT/profile-$pack"
   export STRATA_RUNTIME_DIR="$OUT/runtime-$pack"
   mkdir -p "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$STRATA_PROFILE_DIR" "$STRATA_RUNTIME_DIR" "$DATA"
-  log "launch pack=$pack dir=$dir ctx=$MAXCTX parallel=4 kv=int8 port=$PORT (log $logf)"
+  if [ "$PARALLEL" -le 0 ]; then
+  PARALLEL=1
+  for c in $BATCHES; do [ "$c" -gt "$PARALLEL" ] && PARALLEL=$c; done
+fi
+log "launch pack=$pack dir=$dir ctx=$MAXCTX parallel=$PARALLEL kv=int8 port=$PORT (log $logf)"
   setsid nohup "$STRATA_ROOT/bin/strata" launch \
     --model-path "$dir" \
     --context "$MAXCTX" \
-    --parallel 4 \
+    --parallel "$PARALLEL" \
     --kv int8 \
     --vision off \
     --access local \
@@ -105,6 +110,8 @@ run_pack() { # pack
   case "$pack" in
     iq3s)  dir=$MODELS/iq3s ;;
     coder) dir=$MODELS/coder ;;
+    q2_0)  dir=$MODELS/q2_0 ;;
+    *) log "unknown pack $pack"; return 1 ;;
   esac
   mkdir -p "$OUT/$pack"
   cells="$OUT/$pack/cells.jsonl"; csv="$OUT/$pack/summary.csv"

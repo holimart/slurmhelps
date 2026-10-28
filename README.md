@@ -52,7 +52,7 @@ Check it out as a sibling of the project (`<projects>/slurmhelps`) and call it a
 | `env/env.sh`, `env/toolchain-mffsrv.sh` | user toolchain + caches profile; Troja's MPI/MKL toolchain profile |
 | `llm/glm53-reap50/` | install/serve/benchmark helper for pruned GLM-5.3-Flash (SGLang/vLLM/llama.cpp), with a batched-throughput client (`bench.py`) |
 | `llm/models.json` | model catalogue: canonical names, configs, backends, GPU classes, endpoints, OpenCode provider/model, status |
-| `llm/qwen35/`, `llm/qwen38/` | Qwen3.5 A100 and Qwen3.8 Blackwell serving/measurement helpers |
+| `llm/qwen35/`, `llm/qwen38/`, `llm/thinkingcap-flash-next/` | Qwen3.5 A100, Qwen3.8 Blackwell and ThinkingCap Flash-Next A100 serving helpers |
 | `tests/` | pytest suite (workstation tools; network-free) + `tests/run-cluster-tests.sh` (cluster suites, in Slurm) |
 | `docs/` | `config.md`, `gpu_batch.md`, `hpc_partial.md`, `serving-gateway.md` |
 | `examples/slurmhelps.json` | whiteboxchallenge's config (Troja + LAN 1080 Ti) |
@@ -192,6 +192,19 @@ rather than rebuilt; JIT/autotune caches are persistent under
 [`llm/README.md`](llm/README.md),
 [`llm/qwen35/README.md`](llm/qwen35/README.md) and
 [`llm/qwen38/README.md`](llm/qwen38/README.md).
+
+The experimental A100 ThinkingCap default is:
+
+```bash
+llm/thinkingcap-flash-next/pull-model.sh   # ~132 GB, pinned revision
+llm/thinkingcap-flash-next/serve.sh up --yes
+llm/thinkingcap-flash-next/serve.sh status --json
+```
+
+It runs `ThinkingCap-Qwen3.8-Flash-Next-NVFP4` on `ampere02` (2× A100 80 GB),
+TP2, 262K context, nice=100, `ffa-preempt`. A100 has no native FP4 tensor cores;
+vLLM uses the Marlin W4A16 fallback. The tunnel command and A100 caveats are in
+[`llm/thinkingcap-flash-next/README.md`](llm/thinkingcap-flash-next/README.md).
 
 Downstream consumers can resolve models from
 [`llm/models.json`](llm/models.json) instead of hardcoding ports/paths.

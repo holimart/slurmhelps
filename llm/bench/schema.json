@@ -51,6 +51,7 @@
             "max_dph": {"type": "number", "minimum": 0},
             "max_down_cost_per_tb": {"type": "number", "minimum": 0},
             "min_reliability": {"type": "number", "minimum": 0, "maximum": 1},
+            "min_gpu_frac": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
             "model_gb": {"type": "number", "exclusiveMinimum": 0},
             "hours": {"type": "number", "exclusiveMinimum": 0},
             "image": {"type": "string", "minLength": 1},

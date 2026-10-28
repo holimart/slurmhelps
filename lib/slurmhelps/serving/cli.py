@@ -129,6 +129,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         f"MAX_NUM_BATCHED_TOKENS={cfg.max_num_batched_tokens}",
         f"GPU_MEM_UTIL={cfg.gpu_memory_utilization}",
         f"KV_DTYPE={cfg.kv_cache_dtype}",
+        f"BLOCK_SIZE={cfg.block_size}",
         "ENABLE_CHUNKED_PREFILL=1",
     ]
     if wr:
