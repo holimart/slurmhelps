@@ -33,6 +33,12 @@ MAX_MODEL_LEN=${MAX_MODEL_LEN:-262144}
 MAX_NUM_SEQS=${MAX_NUM_SEQS:-32}
 MAX_NUM_BATCHED_TOKENS=${MAX_NUM_BATCHED_TOKENS:-8192}
 GPU_MEM_UTIL=${GPU_MEM_UTIL:-0.90}
+# Optional per-deployment overrides (not committed): ENFORCE_EAGER, REASONING_PARSER, EXTRA_VLLM_ARGS
+[ -f "$(dirname "${BASH_SOURCE[0]}")/serve-overrides.env" ] && . "$(dirname "${BASH_SOURCE[0]}")/serve-overrides.env"
+# Speed experiments (steward 2026-10-24); defaults keep the known-good behaviour.
+ENFORCE_EAGER=${ENFORCE_EAGER:-0}            # 0 = CUDA graphs (default since 2026-10-24: 94 tok/s vs 19 eager on 2x A100 TP2); 1 = eager
+REASONING_PARSER=${REASONING_PARSER:-}       # e.g. qwen3
+EXTRA_VLLM_ARGS=${EXTRA_VLLM_ARGS:-}         # e.g. --override-generation-config JSON
 KV_DTYPE=${KV_DTYPE:-bfloat16}
 
 # Triton's CudaUtils compiler needs an explicit C compiler on the compute node.
@@ -43,6 +49,11 @@ export JIT_NVCC_COMPILER=${JIT_NVCC_COMPILER:-$CUDA_HOME/bin/nvcc}
 export CC=${CC:-gcc}
 export CXX=${CXX:-g++}
 export PYTHONUNBUFFERED=1
+# ampere02's two A100s are linked "NODE" (PCIe through the host bridge), not NVLink. TP2 NCCL
+# init hung there twice (workers at 100% CPU, ~715 MiB of GPU memory for an hour, no log
+# after the pynccl line), so peer-to-peer is off by default; set NCCL_P2P_DISABLE=0 to retry it.
+export NCCL_P2P_DISABLE=${NCCL_P2P_DISABLE:-1}
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-/tmp/triton-$VARIANT}
 
 [ -x "$VLLM_BIN" ] || { echo "qwen serve: missing vllm: $VLLM_BIN" >&2; exit 2; }
@@ -60,10 +71,13 @@ CMD=("$VLLM_BIN" serve "$MODEL"
   --kv-cache-dtype "$KV_DTYPE"
   --enable-prefix-caching
   --enable-chunked-prefill
-  --enforce-eager
   --enable-auto-tool-choice
   --tool-call-parser qwen3_coder
   --trust-remote-code)
+[ "$ENFORCE_EAGER" = "1" ] && CMD+=(--enforce-eager)
+[ -n "$REASONING_PARSER" ] && CMD+=(--reasoning-parser "$REASONING_PARSER")
+# shellcheck disable=SC2206
+[ -n "$EXTRA_VLLM_ARGS" ] && CMD+=($EXTRA_VLLM_ARGS)
 
 printf '[qwen-serve] variant=%s model=%s tp=%s port=%s\n' "$VARIANT" "$MODEL" "$TP" "$PORT"
 printf '[qwen-serve] command:'; printf ' %q' "${CMD[@]}"; printf '\n'
