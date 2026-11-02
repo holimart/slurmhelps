@@ -58,7 +58,13 @@ GW_ARGS=(--upstream "http://127.0.0.1:$UPORT/v1" --listen-host 0.0.0.0 --listen-
 [ -n "$REWRITE_LOG" ] && GW_ARGS+=(--rewrite-log "$REWRITE_LOG")
 printf '[serve-with-gateway] backend=127.0.0.1:%s gateway=0.0.0.0:%s bad_words=%s rewrite=%s log=%s\n' \
   "$UPORT" "$PORT" "${BAD_WORDS:-none}" "${REWRITE_RULES:-none}" "${REWRITE_LOG:-none}"
-"$HERE/slurmhelps-serve" --config "$CONFIG" gateway "${GW_ARGS[@]}" &
+# The gateway only needs the state directory to exist: --upstream is given, so no node lookup happens.
+# Under sbatch the cwd is the read-only spool directory (/var/spool/slurm/d/job<id>), where the default
+# <cwd>/.slurmhelps-serve/<model> cannot be created (PermissionError, backend exit 1: servers 38349514 and
+# 38349855 died this way right after the model loaded). Give it a writable per-job directory.
+GW_STATE=${SLURMHELPS_SERVE_DIR:-${TMPDIR:-/tmp}/slurmhelps-gateway-${SLURM_JOB_ID:-$$}}
+mkdir -p "$GW_STATE"
+SLURMHELPS_SERVE_DIR="$GW_STATE" "$HERE/slurmhelps-serve" --config "$CONFIG" gateway "${GW_ARGS[@]}" &
 GATEWAY=$!
 
 set +e
