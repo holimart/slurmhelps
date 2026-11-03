@@ -1,0 +1,90 @@
+[
+  {
+    "model": "deepseek-v4.1-flash:1017",
+    "P1": {
+      "status": 200,
+      "dt": 0.7,
+      "finish": "tool_calls",
+      "tool_calls": [
+        {
+          "id": "call_lp37n029",
+          "index": 0,
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"city\":\"Prague\"}"
+          }
+        }
+      ],
+      "content": "I'll check the weather in Prague for you.",
+      "reasoning_keys": [],
+      "leaked": false,
+      "has_tool_calls": true
+    },
+    "P2_no_echo": {
+      "status": 200,
+      "dt": 0.7,
+      "finish": "stop",
+      "content": "Here's the current weather in Prague:\n\n- **Temperature:** 7 \u00b0C (about 45 \u00b0F)\n- **Conditions:** Rain\n\nIt's a chilly, rainy day there \u2014 a jacket and umbrella would come in handy if you're heading out.",
+      "leaked": false
+    },
+    "P2_echo": {
+      "status": 200,
+      "dt": 0.8,
+      "finish": "stop",
+      "content": "Here's the current weather in Prague:\n\n- **Temperature:** 7\u00b0C (about 45\u00b0F)\n- **Conditions:** Rain\n\nChilly and wet \u2014 you'd want a jacket and an umbrella if you're heading out.",
+      "leaked": false
+    },
+    "P3": {
+      "status": 200,
+      "dt": 0.8,
+      "finish": "tool_calls",
+      "n_calls": 3,
+      "leaked": false,
+      "args": [
+        "{\"city\":\"Prague\"}",
+        "{\"city\":\"Brno\"}",
+        "{\"city\":\"Ostrava\"}"
+      ]
+    },
+    "P5": {
+      "status": 200,
+      "dt": 0.6,
+      "finish": [
+        "tool_calls"
+      ],
+      "names": [
+        "get_weather"
+      ],
+      "ids": [
+        "call_vmwhh2o6"
+      ],
+      "args": {
+        "0": "{\"city\":\"Prague\"}"
+      },
+      "args_json_ok": true
+    },
+    "P4": {
+      "status": 200,
+      "dt": 9.2,
+      "hay_tokens_est": 400000,
+      "finish": "stop",
+      "answer": "SECRET-CODE-7431",
+      "ok": true,
+      "usage": {
+        "prompt_tokens": 400051,
+        "completion_tokens": 51,
+        "total_tokens": 400102,
+        "prompt_tokens_details": {
+          "cached_tokens": 29952
+        }
+      }
+    },
+    "P6": {
+      "status": 200,
+      "dt": 2.8,
+      "urls": [],
+      "leaked": false
+    }
+  }
+]

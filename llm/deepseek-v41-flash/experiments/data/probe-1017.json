@@ -1,0 +1,90 @@
+[
+  {
+    "model": "deepseek-v4.1-flash:1017",
+    "P1": {
+      "status": 200,
+      "dt": 0.5,
+      "finish": "tool_calls",
+      "tool_calls": [
+        {
+          "id": "call_qo54yadh",
+          "index": 0,
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"city\":\"Prague\"}"
+          }
+        }
+      ],
+      "content": "",
+      "reasoning_keys": [],
+      "leaked": false,
+      "has_tool_calls": true
+    },
+    "P2_no_echo": {
+      "status": 200,
+      "dt": 0.6,
+      "finish": "stop",
+      "content": "The weather in Prague is currently **7 \u00b0C with rain**. You'll want an umbrella if you're heading out.",
+      "leaked": false
+    },
+    "P2_echo": {
+      "status": 200,
+      "dt": 0.5,
+      "finish": "stop",
+      "content": "The weather in Prague is currently **7\u00b0C with rain**.",
+      "leaked": false
+    },
+    "P3": {
+      "status": 200,
+      "dt": 0.7,
+      "finish": "tool_calls",
+      "n_calls": 3,
+      "leaked": false,
+      "args": [
+        "{\"city\":\"Prague\"}",
+        "{\"city\":\"Brno\"}",
+        "{\"city\":\"Ostrava\"}"
+      ]
+    },
+    "P5": {
+      "status": 200,
+      "dt": 0.7,
+      "finish": [
+        "tool_calls"
+      ],
+      "names": [
+        "get_weather"
+      ],
+      "ids": [
+        "call_3dhff8pr"
+      ],
+      "args": {
+        "0": "{\"city\":\"Prague\"}"
+      },
+      "args_json_ok": true
+    },
+    "P4": {
+      "status": 200,
+      "dt": 3.2,
+      "hay_tokens_est": 60000,
+      "finish": "stop",
+      "answer": "SECRET-CODE-7431",
+      "ok": true,
+      "usage": {
+        "prompt_tokens": 60047,
+        "completion_tokens": 53,
+        "total_tokens": 60100,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    "P6": {
+      "status": 200,
+      "dt": 12.3,
+      "urls": [],
+      "leaked": false
+    }
+  }
+]

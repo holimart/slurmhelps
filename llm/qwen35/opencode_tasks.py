@@ -117,6 +117,11 @@ def run_tests(root: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr)[-4000:]
 
 
+def _txt(v) -> str:
+    """TimeoutExpired carries bytes even with text=True."""
+    return v.decode("utf8", "replace") if isinstance(v, bytes) else (v or "")
+
+
 def run_task(opencode: str, model: str, task: str, prompt: str, root: Path,
              timeout: int) -> dict:
     env = dict(os.environ, PWD=str(root), OLDPWD=str(root))
@@ -128,6 +133,7 @@ def run_task(opencode: str, model: str, task: str, prompt: str, root: Path,
     try:
         proc = subprocess.run(
             cmd, cwd=root, text=True, capture_output=True, timeout=timeout, env=env,
+            stdin=subprocess.DEVNULL,  # open stdin makes `opencode run` hang
         )
         elapsed = time.perf_counter() - started
         return {
@@ -139,8 +145,8 @@ def run_task(opencode: str, model: str, task: str, prompt: str, root: Path,
         return {
             "task": task, "ok": False, "returncode": None,
             "elapsed_s": round(time.perf_counter() - started, 3),
-            "stdout": (exc.stdout or "")[-12000:] if isinstance(exc.stdout, str) else "",
-            "stderr": (exc.stderr or "")[-4000:] if isinstance(exc.stderr, str) else "",
+            "stdout": _txt(exc.stdout)[-12000:],
+            "stderr": _txt(exc.stderr)[-4000:],
             "timeout": True,
         }
 

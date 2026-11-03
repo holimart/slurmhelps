@@ -1,0 +1,478 @@
+{
+ "model": "deepseek-v4.1-flash:1017",
+ "turns": 36,
+ "bad_args": 0,
+ "leaks": 0,
+ "errors": [],
+ "last": [
+  {
+   "turn": 33,
+   "dt": 1.0,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 41914,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 34,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 43174,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 35,
+   "dt": 1.1,
+   "finish": "stop",
+   "n_tc": 0,
+   "leaked": false,
+   "prompt_tokens": 44436,
+   "content": "I read all chunks sequentially, from chunk 0 through chunk 34, without stopping early.\n\n**Total numb"
+  }
+ ],
+ "final": {
+  "role": "tool",
+  "tool_call_id": "call_ozxvpn90",
+  "content": "chunk 34: lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet lorem ipsum dolor sit amet  DONE total=35"
+ },
+ "log": [
+  {
+   "turn": 0,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 334,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 1,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 1594,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 2,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 2854,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 3,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 4114,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 4,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 5374,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 5,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 6634,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 6,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 7894,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 7,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 9154,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 8,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 10414,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 9,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 11674,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 10,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 12934,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 11,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 14194,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 12,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 15454,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 13,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 16714,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 14,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 17974,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 15,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 19234,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 16,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 20494,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 17,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 21754,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 18,
+   "dt": 0.6,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 23014,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 19,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 24274,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 20,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 25534,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 21,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 26794,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 22,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 28054,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 23,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 29314,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 24,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 30574,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 25,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 31834,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 26,
+   "dt": 0.8,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 33094,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 27,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 34354,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 28,
+   "dt": 1.0,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 35614,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 29,
+   "dt": 0.7,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 36874,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 30,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 38134,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 31,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 39394,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 32,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 40654,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 33,
+   "dt": 1.0,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 41914,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 34,
+   "dt": 0.9,
+   "finish": "tool_calls",
+   "n_tc": 1,
+   "leaked": false,
+   "prompt_tokens": 43174,
+   "content": "",
+   "arg_types": [
+    "int"
+   ]
+  },
+  {
+   "turn": 35,
+   "dt": 1.1,
+   "finish": "stop",
+   "n_tc": 0,
+   "leaked": false,
+   "prompt_tokens": 44436,
+   "content": "I read all chunks sequentially, from chunk 0 through chunk 34, without stopping early.\n\n**Total numb"
+  }
+ ]
+}
