@@ -154,6 +154,12 @@ class Worker:
 
     def wait_ready(self, run_until_ready: bool = False) -> dict:
         started = self.clock()
+        # A Slurm requeue restarts this worker on top of the state the
+        # preempted run left behind; record the requeue so preempted ->
+        # requeued -> starting stays inside ALLOWED_TRANSITIONS.
+        prior = (self.store.read() or {}).get("state")
+        if prior == "preempted":
+            self._set(state="requeued", phase="requeued", job_id=self.spec.job_id)
         self._set(
             state="starting",
             job_id=self.spec.job_id,

@@ -108,3 +108,13 @@ def test_worker_startup_timeout(tmp_path):
     state = worker.wait_ready(run_until_ready=True)
     assert state["state"] == "failed"
     assert "timeout" in state["error"]
+
+
+def test_worker_restarts_after_preemption_via_requeued(tmp_path):
+    # A requeued Slurm job starts on top of the state its preempted run left.
+    store = StateStore(tmp_path)
+    store.update(state="starting", job_id="123")
+    store.update(state="preempted", job_id="123")
+    worker, _proc = make_worker(tmp_path, health=lambda n: n >= 2)
+    state = worker.wait_ready(run_until_ready=True)
+    assert state["state"] == "ready"
