@@ -20,7 +20,10 @@
 #    ly lanes [args...]        shortcut: langywrap lanes <args...>
 #    ly steward [args...]      shortcut: langywrap steward <args...>
 #    ly doctor                 shortcut: langypi doctor --strict
-#    ly exec '<shell>'         run an arbitrary shell command inside the alloc
+#    ly exec [--cpus N] '<shell>'
+#                              run an arbitrary shell command inside the alloc;
+#                              --cpus N (or LY_EXEC_CPUS=N) gives the step N CPUs
+#                              (srun --cpus-per-task) instead of srun's default
 #    ly start-lane [--abandon-stale] <lane...>
 #                              start lanes (incl. steward) inside the alloc
 #    ly up [sbatch args...]    submit the supervisor allocation (footprint from
@@ -273,7 +276,12 @@ in_alloc() {  # in_alloc <shell-command>
   fi
   # env -u BASH_ENV: compute nodes set BASH_ENV to lmod's init, which dumps
   # the environment and corrupts the step; clear it for our command.
-  srun_with_retry --jobid="$j" --overlap -n1 --chdir "$p" \
+  # LY_EXEC_CPUS (set by `ly exec --cpus N`): an explicit CPU count for this one
+  # step (srun --cpus-per-task). Without it the step gets srun's default share of
+  # the allocation (40 CPUs on uk-d6-01 on 2026-11-05).
+  local -a cpus=()
+  [ -n "${LY_EXEC_CPUS:-}" ] && cpus=(--cpus-per-task="$LY_EXEC_CPUS")
+  srun_with_retry --jobid="$j" --overlap -n1 ${cpus[@]+"${cpus[@]}"} --chdir "$p" \
     env -u BASH_ENV ${ws[@]+"${ws[@]}"} bash -c "${rt:+export XDG_RUNTIME_DIR='$rt'; }${sdb:+export LANGYWRAP_SESSIONS_DB_DIR='$sdb'; }$REMOTE_PRELUDE; cd $(printf '%q' "$p") 2>/dev/null; $1"
 }
 
@@ -344,7 +352,18 @@ except Exception:
   langypi)
     shift; remote_command langypi "$@" ;;
   exec)
-    shift; in_alloc "$*" ;;
+    shift
+    case "${1:-}" in
+      --cpus) [ $# -ge 2 ] || die "ly exec --cpus needs a value"; LY_EXEC_CPUS="$2"; shift 2 ;;
+      --cpus=*) LY_EXEC_CPUS="${1#--cpus=}"; shift ;;
+    esac
+    if [ -n "${LY_EXEC_CPUS:-}" ]; then
+      case "$LY_EXEC_CPUS" in
+        ''|*[!0-9]*|0) die "ly exec --cpus: expected a positive integer, got '$LY_EXEC_CPUS'" ;;
+      esac
+    fi
+    [ $# -ge 1 ] || die "usage: ly exec [--cpus N] '<shell>'"
+    in_alloc "$*" ;;
 
   hot-reload)
     # Guarded NO-DRAIN source reload. The daemon hot-reloads itself when the
