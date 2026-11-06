@@ -30,6 +30,7 @@ from .config import ServingConfig
 from .controller import Controller
 from .gateway import GatewayServer, load_bad_words
 from .rewrite import Rewriter, default_rules, load_rules
+from .router import DEFAULT_ROUTER_PORT, Deployment, Router, RouterServer
 from .mock import MockOpenAIServer
 from .spill import SpillManager
 from .state import StateStore
@@ -39,6 +40,11 @@ from .worker import WorkerSpec, run_worker
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STATE_SUBDIR = ".slurmhelps-serve"
 DEFAULT_SERVER_HELPER = ROOT / "llm" / "glm53-reap50" / "serve-server.sh"
+# Router deployments in preference order: Blackwell first, then Hopper.
+DEFAULT_ROUTER_DEPLOYMENTS = (
+    ("bw", ROOT / "llm" / "qwen38" / "config-bw.json"),
+    ("hopper", ROOT / "llm" / "qwen38" / "config-hopper.json"),
+)
 
 
 def project_config() -> dict[str, Any]:
@@ -270,6 +276,69 @@ def cmd_relay(args: argparse.Namespace) -> int:
     return 0
 
 
+def router_deployments(specs: list[str], state_root: Path) -> list[Deployment]:
+    """``NAME=CONFIG`` specs (preference order) -> deployments.
+
+    A deployment's state directory is ``<state_root>/<serving.model>`` (what
+    ``up`` uses when run from the checkout root) and its node port is
+    ``serving.port``.
+    """
+    pairs: list[tuple[str, Path]] = []
+    if specs:
+        for spec in specs:
+            name, sep, path = spec.partition("=")
+            if not sep or not name.strip() or not path.strip():
+                raise SystemExit(f"--deployment must be NAME=CONFIG, got {spec!r}")
+            pairs.append((name.strip(), Path(path.strip())))
+    else:
+        pairs = list(DEFAULT_ROUTER_DEPLOYMENTS)
+    out = []
+    for name, path in pairs:
+        cfg = load_config(str(path))
+        out.append(Deployment(name=name, state_dir=state_root / cfg.model, port=cfg.port))
+    return out
+
+
+def cmd_router(args: argparse.Namespace) -> int:
+    if args.status:
+        import urllib.error
+        import urllib.request
+        url = f"http://{args.listen_host}:{args.listen_port}/router/status"
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                status = json.loads(resp.read())
+        except (OSError, urllib.error.URLError) as exc:
+            print(f"router not answering at {url}: {exc}", file=sys.stderr)
+            return 3
+        if args.json:
+            print(json.dumps(status, indent=2, sort_keys=True))
+        else:
+            print(f"router {args.listen_host}:{args.listen_port} active={status.get('active') or '-'} "
+                  f"({status.get('status')}) failovers={status.get('failovers')}")
+            for dep in status.get("deployments", []):
+                mark = "READY" if dep.get("ready") else "down "
+                print(f"  {mark} {dep.get('name'):8s} job={dep.get('job_id') or '-'} "
+                      f"node={dep.get('node') or '-'}:{dep.get('port')} state={dep.get('state')} "
+                      f"{dep.get('reason') or ''}".rstrip())
+        return 0 if status.get("active") else 1
+    state_root = Path(args.state_root or os.environ.get("SLURMHELPS_SERVE_ROOT")
+                      or ROOT / DEFAULT_STATE_SUBDIR)
+    deployments = router_deployments(args.deployment, state_root)
+    router = Router(deployments, cooldown_s=args.cooldown, read_timeout_s=args.timeout)
+    server = RouterServer(router, listen_host=args.listen_host, listen_port=args.listen_port)
+    server.start()
+    order = ", ".join(f"{d.name}={d.state_dir}:{d.port}" for d in deployments)
+    print(f"router {server.base_url} -> [{order}]", flush=True)
+    try:
+        while True:
+            signal.pause()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+    return 0
+
+
 def cmd_down(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     directory = state_dir(cfg, args.state_dir)
@@ -471,6 +540,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--target-host", default="")
     p.add_argument("--target-port", type=int, default=0)
     p.set_defaults(func=cmd_relay)
+
+    p = sub.add_parser("router", help="loopback HTTP router to the first ready deployment")
+    p.add_argument("--deployment", action="append", default=[], metavar="NAME=CONFIG",
+                   help="deployment in preference order (repeatable; default: qwen38 bw, hopper)")
+    p.add_argument("--state-root", default="",
+                   help="directory holding <model>/state.json (default: $SLURMHELPS_SERVE_ROOT "
+                        "or <checkout>/.slurmhelps-serve)")
+    p.add_argument("--listen-host", default="127.0.0.1")
+    p.add_argument("--listen-port", type=int, default=DEFAULT_ROUTER_PORT)
+    p.add_argument("--cooldown", type=float, default=30.0,
+                   help="seconds a deployment is skipped after a failed connection")
+    p.add_argument("--timeout", type=float, default=3600.0, help="upstream read timeout in seconds")
+    p.add_argument("--status", action="store_true", help="query a running router and exit")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_router)
 
     p = sub.add_parser("down", help="cancel the job")
     p.set_defaults(func=cmd_down)
