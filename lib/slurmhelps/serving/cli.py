@@ -30,7 +30,7 @@ from .config import ServingConfig
 from .controller import Controller
 from .gateway import GatewayServer, load_bad_words
 from .rewrite import Rewriter, default_rules, load_rules
-from .router import DEFAULT_ROUTER_PORT, Deployment, Router, RouterServer
+from .router import DEFAULT_ROUTER_PORT, Router, RouterServer, load_catalog
 from .mock import MockOpenAIServer
 from .spill import SpillManager
 from .state import StateStore
@@ -40,11 +40,8 @@ from .worker import WorkerSpec, run_worker
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STATE_SUBDIR = ".slurmhelps-serve"
 DEFAULT_SERVER_HELPER = ROOT / "llm" / "glm53-reap50" / "serve-server.sh"
-# Router deployments in preference order: Blackwell first, then Hopper.
-DEFAULT_ROUTER_DEPLOYMENTS = (
-    ("bw", ROOT / "llm" / "qwen38" / "config-bw.json"),
-    ("hopper", ROOT / "llm" / "qwen38" / "config-hopper.json"),
-)
+# Catalogue the router reads for deployment metadata and per-model guards.
+DEFAULT_MODELS_JSON = ROOT / "llm" / "models.json"
 
 
 def project_config() -> dict[str, Any]:
@@ -276,27 +273,29 @@ def cmd_relay(args: argparse.Namespace) -> int:
     return 0
 
 
-def router_deployments(specs: list[str], state_root: Path) -> list[Deployment]:
-    """``NAME=CONFIG`` specs (preference order) -> deployments.
-
-    A deployment's state directory is ``<state_root>/<serving.model>`` (what
-    ``up`` uses when run from the checkout root) and its node port is
-    ``serving.port``.
-    """
-    pairs: list[tuple[str, Path]] = []
-    if specs:
-        for spec in specs:
-            name, sep, path = spec.partition("=")
-            if not sep or not name.strip() or not path.strip():
-                raise SystemExit(f"--deployment must be NAME=CONFIG, got {spec!r}")
-            pairs.append((name.strip(), Path(path.strip())))
-    else:
-        pairs = list(DEFAULT_ROUTER_DEPLOYMENTS)
-    out = []
-    for name, path in pairs:
-        cfg = load_config(str(path))
-        out.append(Deployment(name=name, state_dir=state_root / cfg.model, port=cfg.port))
+def _pairs(specs: list[str], flag: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for spec in specs:
+        key, sep, value = spec.partition("=")
+        if not sep or not key.strip() or not value.strip():
+            raise SystemExit(f"{flag} must be NAME=VALUE, got {spec!r}")
+        out[key.strip()] = value.strip()
     return out
+
+
+def build_router(args: argparse.Namespace) -> Router:
+    """Router over every state dir under the serve root (see router.py)."""
+    state_root = Path(args.state_root or os.environ.get("SLURMHELPS_SERVE_ROOT")
+                      or ROOT / DEFAULT_STATE_SUBDIR)
+    catalog, guards = [], {}
+    if args.models_json and not args.no_models_json:
+        catalog, guards = load_catalog(args.models_json, ROOT, rewrite_log_dir=state_root / "router")
+    if args.no_guards:
+        guards = {}
+    prefer = [name for item in args.prefer for name in item.split(",") if name.strip()]
+    return Router(state_root, catalog=catalog, guards=guards, prefer=prefer,
+                  aliases=_pairs(args.alias, "--alias"), cooldown_s=args.cooldown,
+                  read_timeout_s=args.timeout)
 
 
 def cmd_router(args: argparse.Namespace) -> int:
@@ -314,21 +313,24 @@ def cmd_router(args: argparse.Namespace) -> int:
             print(json.dumps(status, indent=2, sort_keys=True))
         else:
             print(f"router {args.listen_host}:{args.listen_port} active={status.get('active') or '-'} "
-                  f"({status.get('status')}) failovers={status.get('failovers')}")
+                  f"({status.get('status')}) models={','.join(status.get('models') or []) or '-'} "
+                  f"failovers={status.get('failovers')}")
+            for model, guard in (status.get("guards") or {}).items():
+                print(f"  guard {model}: bad_words={guard.get('bad_words')} "
+                      f"rewrite_rules={guard.get('rewrite_rules')} shellguard={guard.get('shellguard')} "
+                      f"privguard={guard.get('privguard')}")
             for dep in status.get("deployments", []):
                 mark = "READY" if dep.get("ready") else "down "
-                print(f"  {mark} {dep.get('name'):8s} job={dep.get('job_id') or '-'} "
+                print(f"  {mark} {dep.get('name'):26s} job={dep.get('job_id') or '-'} "
                       f"node={dep.get('node') or '-'}:{dep.get('port')} "
                       f"{dep.get('reason') or 'state=' + str(dep.get('state'))}")
         return 0 if status.get("active") else 1
-    state_root = Path(args.state_root or os.environ.get("SLURMHELPS_SERVE_ROOT")
-                      or ROOT / DEFAULT_STATE_SUBDIR)
-    deployments = router_deployments(args.deployment, state_root)
-    router = Router(deployments, cooldown_s=args.cooldown, read_timeout_s=args.timeout)
+    router = build_router(args)
     server = RouterServer(router, listen_host=args.listen_host, listen_port=args.listen_port)
     server.start()
-    order = ", ".join(f"{d.name}={d.state_dir}:{d.port}" for d in deployments)
-    print(f"router {server.base_url} -> [{order}]", flush=True)
+    print(f"router {server.base_url} serve_root={router.serve_root} "
+          f"deployments={list(router.states())} guards={sorted(router.guards)} "
+          f"prefer={router.prefer} aliases={router.aliases}", flush=True)
     try:
         while True:
             signal.pause()
@@ -542,11 +544,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_relay)
 
     p = sub.add_parser("router", help="loopback HTTP router to the first ready deployment")
-    p.add_argument("--deployment", action="append", default=[], metavar="NAME=CONFIG",
-                   help="deployment in preference order (repeatable; default: qwen38 bw, hopper)")
     p.add_argument("--state-root", default="",
-                   help="directory holding <model>/state.json (default: $SLURMHELPS_SERVE_ROOT "
-                        "or <checkout>/.slurmhelps-serve)")
+                   help="serve root: every <dir>/state.json below it is a deployment (default: "
+                        "$SLURMHELPS_SERVE_ROOT or <checkout>/.slurmhelps-serve)")
+    p.add_argument("--models-json", default=str(DEFAULT_MODELS_JSON),
+                   help="catalogue for metadata, ports and per-model guards")
+    p.add_argument("--no-models-json", action="store_true", help="discover without the catalogue")
+    p.add_argument("--no-guards", action="store_true", help="do not apply catalogue guards")
+    p.add_argument("--prefer", action="append", default=[], metavar="DIR[,DIR...]",
+                   help="deployment (state dir) preference order; default: catalogue order")
+    p.add_argument("--alias", action="append", default=[], metavar="NAME=MODEL",
+                   help="route requests for model NAME to served model MODEL (repeatable)")
     p.add_argument("--listen-host", default="127.0.0.1")
     p.add_argument("--listen-port", type=int, default=DEFAULT_ROUTER_PORT)
     p.add_argument("--cooldown", type=float, default=30.0,
