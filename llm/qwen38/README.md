@@ -72,6 +72,66 @@ using the new node from `serve.sh status --json` or `serve.sh endpoint`. A
 tunnel targets `host:port`, not a Slurm job ID, so an already open tunnel can
 survive a job restart only while the node and port stay the same.
 
+## Two deployments and the login-node router
+
+| deployment | config | GPUs | node port | state dir | status |
+|---|---|---|---|---|---|
+| `bw` | `config-bw.json` | 2× BW6000 96 GB, bw01 | 8010 | `.slurmhelps-serve/qwen38-flash-next` | production |
+| `hopper` | `config-hopper.json` | 2× H100 80 GB, hopper01 (`--gres=gpu:H100:2`) | 8020 | `.slurmhelps-serve/qwen38-flash-next-hopper` | **blocked** |
+
+`serve.sh` selects a deployment with `--target bw|hopper` (default `bw`, which
+behaves exactly as before). Hopper `up` is refused: this container loads the
+NVFP4-CSF experts and the NVFP4 PLE table only through b12x kernels, which run
+on SM120/121 only. See
+[`experiments/2026-11-06-qwen38-hopper.md`](experiments/2026-11-06-qwen38-hopper.md)
+for the evidence and what an SM90 build would need.
+
+The **router** runs on the login node, bound to loopback only, at
+`127.0.0.1:18000`. It reads both state files. Each request goes to the first
+deployment, in the order `bw`, then `hopper`, that is `ready` with a fresh
+heartbeat. A connection failure skips that deployment for 30 s, and the router
+fails over to the next one.
+
+- **Proxied traffic:** all OpenAI paths, including SSE streaming,
+  `/v1/models` and `/health`. Responses carry `X-Slurmhelps-Deployment`.
+- **No ready deployment:** the router answers `503 "no ready deployment"`.
+- **Router status:** `/router/status` reports the router's own view.
+- **Authentication:** the router adds no API key of its own and passes
+  `Authorization` headers through.
+
+```bash
+llm/qwen38/router.sh start    # background; pid/log in .slurmhelps-serve/router/
+llm/qwen38/router.sh status   # active deployment + per-deployment reason
+llm/qwen38/router.sh stop
+```
+
+To connect a client, tunnel to the router on the login node instead of to a
+compute node. The tunnel then survives preemption, requeue and a switch between
+deployments:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 8010:127.0.0.1:18000 "$USER@hpc-head.troja.mff.cuni.cz"
+curl -s http://127.0.0.1:8010/v1/models     # served name: qwen38-flash-next
+```
+
+On the login node itself, use `http://127.0.0.1:18000/v1` directly.
+
+### Operator rules
+
+1. Every Qwen job is preemptible and lowest priority: partition `ffa-preempt`
+   only, `--requeue`, `--nice=100`. Never `gpu-ffa`, `gpu-ffa-preempt`,
+   `gpu-long` and so on.
+2. Never submit to the L40 nodes (ampere01/03, fuuk-*, uk-g6-*, mff-a2-19,
+   ucjf-a4-01). They are reserved for experiments. Hopper jobs are pinned with
+   `--gres=gpu:H100:2`; hopper01 is the only H100 node.
+3. bw01 (Blackwell) stays reserved for Qwen.
+4. Do not modify, cancel or resubmit a running or pending deployment job to
+   make room for another one. If a job pends for RAM or GPU, report it; do not
+   raise its priority.
+5. Git: never force-push, never re-add an `upstream` remote, no git hooks.
+   Commit with path-scoped commits on a branch.
+
 ## Measure
 
 Once ready:
