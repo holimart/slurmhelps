@@ -318,8 +318,8 @@ def cmd_router(args: argparse.Namespace) -> int:
             for dep in status.get("deployments", []):
                 mark = "READY" if dep.get("ready") else "down "
                 print(f"  {mark} {dep.get('name'):8s} job={dep.get('job_id') or '-'} "
-                      f"node={dep.get('node') or '-'}:{dep.get('port')} state={dep.get('state')} "
-                      f"{dep.get('reason') or ''}".rstrip())
+                      f"node={dep.get('node') or '-'}:{dep.get('port')} "
+                      f"{dep.get('reason') or 'state=' + str(dep.get('state'))}")
         return 0 if status.get("active") else 1
     state_root = Path(args.state_root or os.environ.get("SLURMHELPS_SERVE_ROOT")
                       or ROOT / DEFAULT_STATE_SUBDIR)

@@ -172,6 +172,11 @@ class Router:
         }
 
 
+class _HTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    request_queue_size = 128  # a fleet of agents connects at once
+
+
 class RouterServer:
     """Threaded loopback HTTP server around a :class:`Router`."""
 
@@ -202,8 +207,7 @@ class RouterServer:
     def start(self) -> "RouterServer":
         if self._server is not None:
             return self
-        server = ThreadingHTTPServer((self.listen_host, self.listen_port), _RouterHandler)
-        server.daemon_threads = True
+        server = _HTTPServer((self.listen_host, self.listen_port), _RouterHandler)
         server.router = self.router  # type: ignore[attr-defined]
         self._server = server
         self._thread = threading.Thread(
