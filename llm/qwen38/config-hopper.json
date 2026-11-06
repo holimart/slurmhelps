@@ -1,13 +1,13 @@
 {
   "serving": {
     "model": "qwen38-flash-next-hopper",
-    "engine": "vllm-hopper-blocked",
+    "engine": "vllm-hopper-nightly",
     "gpus": 2,
     "gpu_type": "H100",
     "partition": "ffa-preempt",
     "account": "ffa",
     "cpus": 8,
-    "mem": "96G",
+    "mem": "160G",
     "time": "24:00:00",
     "requeue": true,
     "nice": 100,
