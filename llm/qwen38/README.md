@@ -86,18 +86,40 @@ on SM120/121 only. See
 [`experiments/2026-11-06-qwen38-hopper.md`](experiments/2026-11-06-qwen38-hopper.md)
 for the evidence and what an SM90 build would need.
 
-The **router** runs on the login node, bound to loopback only, at
-`127.0.0.1:18000`. It reads both state files. Each request goes to the first
-deployment, in the order `bw`, then `hopper`, that is `ready` with a fresh
-heartbeat. A connection failure skips that deployment for 30 s, and the router
-fails over to the next one.
+The **router** runs on the login node at `127.0.0.1:18000`, bound to loopback
+only. It discovers every deployment under `.slurmhelps-serve/*/state.json`;
+`llm/models.json` supplies metadata, ports and guards, and deployments missing
+from the catalogue are found too. A deployment counts as ready when its state
+is `ready` with a fresh heartbeat.
 
-- **Proxied traffic:** all OpenAI paths, including SSE streaming,
-  `/v1/models` and `/health`. Responses carry `X-Slurmhelps-Deployment`.
-- **No ready deployment:** the router answers `503 "no ready deployment"`.
-- **Router status:** `/router/status` reports the router's own view.
-- **Authentication:** the router adds no API key of its own and passes
-  `Authorization` headers through.
+- **Routing:** each request goes by its OpenAI `model` field.
+  - `qwen38-flash-next` goes to `qwen38-flash-next` (bw) first, then to
+    `qwen38-flash-next-hopper`. Change the order with `--prefer`; map extra
+    names to a served model with `--alias NAME=MODEL`.
+  - Other names go to whichever deployment serves them. Unknown names get 404
+    `model_not_found`.
+  - `/v1/models` is the union of the ready deployments' models.
+  - `/health` returns 200 when anything is ready and 503 `"no ready
+    deployment"` otherwise.
+  - `/router/status` lists every deployment found, with its state and the
+    reason it is not ready.
+- **Failover:** a connection failure skips that deployment for 30 s and the
+  router tries the next one.
+- **Authentication:** the router adds no API key and passes `Authorization`
+  headers through.
+
+**Guards.** For a model with `guards` in `models.json` (qwen38:
+`bad_words.json` and `rewrite_rules.json`), the router applies the node
+gateway's guards in-process, reusing the gateway code:
+
+- **Requests:** bad_words are merged in and the history is scrubbed, with
+  shellguard and privguard repairs.
+- **Responses:** JSON and SSE are rewritten; streams stay streams.
+
+A deployment started with `QWEN38_GATEWAY=0` is therefore still guarded. The
+guards are idempotent, so they also run when the node gateway is on, and tests
+check that the result is the same as applying them once. Router rewrites are
+logged to `.slurmhelps-serve/router/rewrites-<model>.jsonl`.
 
 ```bash
 llm/qwen38/router.sh start    # background; pid/log in .slurmhelps-serve/router/

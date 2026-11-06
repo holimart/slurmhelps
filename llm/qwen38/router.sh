@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Login-node router for the qwen38 deployments (bw first, then hopper).
+# Login-node router over every slurmhelps deployment (qwen38: bw first, then hopper).
 #
 #   llm/qwen38/router.sh start    # background; pid + log under <state root>/router/
 #   llm/qwen38/router.sh status   # which deployment is active (exit 0 only if one is ready)
@@ -19,9 +19,10 @@ STATE_ROOT=${SLURMHELPS_SERVE_ROOT:-$ROOT/.slurmhelps-serve}
 RUN_DIR="$STATE_ROOT/router"
 PIDFILE="$RUN_DIR/router-$PORT.pid"
 LOG="$RUN_DIR/router-$PORT.log"
+# Every <state root>/*/state.json is discovered; qwen38 prefers bw, then hopper.
+# Per-model guards (bad_words + rewrite rules) come from llm/models.json.
 ARGS=(router --state-root "$STATE_ROOT" --listen-port "$PORT"
-  --deployment "bw=$HERE/config-bw.json"
-  --deployment "hopper=$HERE/config-hopper.json")
+  --prefer qwen38-flash-next,qwen38-flash-next-hopper ${QWEN38_ROUTER_ARGS:-})
 
 running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
