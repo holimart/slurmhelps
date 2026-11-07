@@ -75,6 +75,7 @@ CMD=(apptainer exec --nv
   --host "$VLLM_HOST" --port "$VLLM_PORT"
   --served-model-name "$SERVED"
   --tensor-parallel-size "$TP"
+  --mm-encoder-tp-mode data
   --dtype bfloat16
   --engram-config '{"cpu_offload":true}'
   --enable-auto-tool-choice
