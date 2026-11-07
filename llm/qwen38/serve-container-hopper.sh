@@ -53,6 +53,10 @@ for d in triton torchinductor cuda vllm xdg hf; do
   mkdir -p "$CACHE_ROOT/$d"
 done
 
+# Hopper runs on a tight host-RAM budget (other users hold most of hopper01's RAM):
+# drop the vision encoder by default (operator 2026-11-07). VISION=1 keeps it, unsharded.
+if [ "${VISION:-0}" = 1 ]; then MM_ARGS=(--mm-encoder-tp-mode data); else MM_ARGS=(--language-model-only); fi
+
 CMD=(apptainer exec --nv
   --bind "$WORK_ROOT:$WORK_ROOT"
   --bind "$CACHE_ROOT:/cache"
@@ -75,7 +79,7 @@ CMD=(apptainer exec --nv
   --host "$VLLM_HOST" --port "$VLLM_PORT"
   --served-model-name "$SERVED"
   --tensor-parallel-size "$TP"
-  --mm-encoder-tp-mode data
+  "${MM_ARGS[@]}"
   --dtype bfloat16
   --engram-config '{"cpu_offload":true}'
   --enable-auto-tool-choice
