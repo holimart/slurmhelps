@@ -80,6 +80,7 @@ CMD=(apptainer exec --nv
   --served-model-name "$SERVED"
   --tensor-parallel-size "$TP"
   "${MM_ARGS[@]}"
+  --disable-custom-all-reduce
   --dtype bfloat16
   --engram-config '{"cpu_offload":true}'
   --enable-auto-tool-choice
