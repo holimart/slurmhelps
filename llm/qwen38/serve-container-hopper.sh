@@ -69,6 +69,8 @@ CMD=(apptainer exec --nv
   --env NCCL_CUMEM_ENABLE=0
   --env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
   --env VLLM_WORKER_MULTIPROC_METHOD=spawn
+  --env CC=gcc
+  --env CXX=g++
   "$SIF" vllm serve "$MODEL"
   --host "$VLLM_HOST" --port "$VLLM_PORT"
   --served-model-name "$SERVED"
