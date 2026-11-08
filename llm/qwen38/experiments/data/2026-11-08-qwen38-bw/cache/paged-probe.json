@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-11-08T01:37:46Z",
+  "engine": "paged-openai",
+  "base_url": "http://bw01:8010",
+  "model": "qwen38-flash-next",
+  "prefixes": [
+    50000,
+    100000,
+    200000
+  ],
+  "suffix_tokens": 128,
+  "osl": 128,
+  "miss": "inferred; no cold miss requests",
+  "rows": [
+    {
+      "prefix_tokens": 50000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 4.1736,
+      "expected_new_tokens": 50000,
+      "incremental_prefill_tok_s": 11980.0,
+      "cumulative_fill_s": 4.1736,
+      "hit_ttft_s": 0.5902,
+      "hit_reuse_ratio": 7.07,
+      "hit_suffix_prefill_tok_s": 216.87,
+      "hit_decode_tok_s": 161.99,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.1781,
+      "repeat_reuse_ratio": 3.31,
+      "inferred_miss_ttft_s": 4.7638,
+      "prefix_cache": {}
+    },
+    {
+      "prefix_tokens": 100000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 4.335,
+      "expected_new_tokens": 50000,
+      "incremental_prefill_tok_s": 11533.97,
+      "cumulative_fill_s": 8.5086,
+      "hit_ttft_s": 0.7162,
+      "hit_reuse_ratio": 6.05,
+      "hit_suffix_prefill_tok_s": 178.71,
+      "hit_decode_tok_s": 99.59,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 2.5247,
+      "repeat_reuse_ratio": 0.28,
+      "inferred_miss_ttft_s": 9.2249,
+      "prefix_cache": {}
+    },
+    {
+      "prefix_tokens": 200000,
+      "status": "ok",
+      "suffix_tokens": 128,
+      "fill_ttft_s": 8.4348,
+      "expected_new_tokens": 100000,
+      "incremental_prefill_tok_s": 11855.69,
+      "cumulative_fill_s": 16.9434,
+      "hit_ttft_s": 0.8326,
+      "hit_reuse_ratio": 10.13,
+      "hit_suffix_prefill_tok_s": 153.74,
+      "hit_decode_tok_s": 125.49,
+      "hit_output_tokens": 128,
+      "repeat_ttft_s": 0.9357,
+      "repeat_reuse_ratio": 0.89,
+      "inferred_miss_ttft_s": 17.776,
+      "prefix_cache": {}
+    }
+  ]
+}
