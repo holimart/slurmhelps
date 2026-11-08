@@ -295,7 +295,8 @@ def build_router(args: argparse.Namespace) -> Router:
     prefer = [name for item in args.prefer for name in item.split(",") if name.strip()]
     return Router(state_root, catalog=catalog, guards=guards, prefer=prefer,
                   aliases=_pairs(args.alias, "--alias"), cooldown_s=args.cooldown,
-                  read_timeout_s=args.timeout)
+                  read_timeout_s=args.timeout,
+                  balance=getattr(args, "balance", "prefer").replace("-", "_"))
 
 
 def cmd_router(args: argparse.Namespace) -> int:
@@ -330,7 +331,7 @@ def cmd_router(args: argparse.Namespace) -> int:
     server.start()
     print(f"router {server.base_url} serve_root={router.serve_root} "
           f"deployments={list(router.states())} guards={sorted(router.guards)} "
-          f"prefer={router.prefer} aliases={router.aliases}", flush=True)
+          f"prefer={router.prefer} balance={router.balance} aliases={router.aliases}", flush=True)
     try:
         while True:
             signal.pause()
@@ -553,6 +554,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-guards", action="store_true", help="do not apply catalogue guards")
     p.add_argument("--prefer", action="append", default=[], metavar="DIR[,DIR...]",
                    help="deployment (state dir) preference order; default: catalogue order")
+    p.add_argument("--balance", choices=("prefer", "least-inflight"), default="prefer",
+                   help="prefer: first ready deployment in preference order takes every request "
+                        "(the others are failover); least-inflight: the ready deployment with the "
+                        "fewest requests in flight takes it, preference order breaks ties")
     p.add_argument("--alias", action="append", default=[], metavar="NAME=MODEL",
                    help="route requests for model NAME to served model MODEL (repeatable)")
     p.add_argument("--listen-host", default="127.0.0.1")

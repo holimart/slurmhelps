@@ -59,6 +59,7 @@ from .state import DEFAULT_HEARTBEAT_TIMEOUT_S, heartbeat_age_s, read_json
 from .tunnel import _check_bind
 
 DEFAULT_ROUTER_PORT = 18_000
+BALANCE_MODES = ("prefer", "least_inflight")
 
 
 @dataclass(frozen=True)
@@ -168,8 +169,12 @@ class Router:
         read_timeout_s: float = 3600.0,
         state_ttl_s: float = 2.0,
         models_ttl_s: float = 60.0,
+        balance: str = "prefer",
         clock: Callable[[], float] = time.time,
     ) -> None:
+        if balance not in BALANCE_MODES:
+            raise ValueError(f"balance must be one of {BALANCE_MODES}, got {balance!r}")
+        self.balance = balance
         self.serve_root = Path(serve_root)
         self.catalog = {entry.name: entry for entry in (catalog or [])}
         self._catalog_order = [entry.name for entry in (catalog or [])]
@@ -188,6 +193,7 @@ class Router:
         self._state_cache: tuple[float, dict[str, dict[str, Any]]] | None = None
         self._models_cache: dict[str, tuple[float, tuple[Any, ...], list[dict[str, Any]]]] = {}
         self.counters: dict[str, int] = {}
+        self._inflight: dict[str, int] = {}
         self.failovers = 0
 
     # -- discovery -------------------------------------------------------------
@@ -319,6 +325,30 @@ class Router:
                 return self.guards[served]
         return None
 
+    def order(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Try order for one request. ``prefer``: preference order (first ready
+        wins, the rest are failover). ``least_inflight``: fewest requests in
+        flight first, preference order breaking ties -- every ready deployment
+        takes load, and failover still walks the rest of the list."""
+        if self.balance != "least_inflight":
+            return list(candidates)
+        with self._lock:
+            load = dict(self._inflight)
+        ranked = sorted(enumerate(candidates), key=lambda pair: (load.get(pair[1]["name"], 0), pair[0]))
+        return [info for _, info in ranked]
+
+    def acquire(self, name: str) -> None:
+        with self._lock:
+            self._inflight[name] = self._inflight.get(name, 0) + 1
+
+    def release(self, name: str) -> None:
+        with self._lock:
+            left = self._inflight.get(name, 0) - 1
+            if left > 0:
+                self._inflight[name] = left
+            else:
+                self._inflight.pop(name, None)
+
     def mark_failed(self, name: str) -> None:
         with self._lock:
             self._cooldown_until[name] = self.clock() + self.cooldown_s
@@ -352,6 +382,8 @@ class Router:
             "guards": {model: guard.describe() for model, guard in self.guards.items()},
             "aliases": dict(self.aliases),
             "prefer": list(self.prefer),
+            "balance": self.balance,
+            "inflight": dict(self._inflight),
             "requests": dict(self.counters),
             "failovers": self.failovers,
         }
@@ -475,17 +507,20 @@ class _RouterHandler(_GatewayHandler):
             return
         completion = self.command == "POST" and path.endswith("/completions")
         tried: list[str] = []
-        for info in candidates:
+        for info in router.order(candidates):
             tried.append(info["name"])
             guard = router.guard_for(model, info) if completion else None
             out = body
             if guard is not None:
                 out, _ = guard_request_body(body, guard.bad_words, guard.rewriter, request_id)
+            router.acquire(info["name"])
             try:
                 self._proxy_to(info, out, request_id, guard)
             except _UpstreamFailed:
                 router.mark_failed(info["name"])
                 continue
+            finally:
+                router.release(info["name"])
             router.mark_ok(info["name"])
             return
         self._unavailable(request_id, f"no ready deployment answered (tried {', '.join(tried)})")

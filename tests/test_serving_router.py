@@ -248,6 +248,45 @@ def test_prefer_and_alias(tmp_path, start_router, make_backend):
     assert hopper.bodies[-1]["model"] == QWEN  # alias rewritten to the served name
 
 
+def test_least_inflight_spreads_load_and_prefer_does_not(tmp_path, start_router, make_backend):
+    bw, hopper = make_backend(QWEN), make_backend(QWEN)
+    _write_state(tmp_path / "serve", QWEN, "ready", bw.port)
+    _write_state(tmp_path / "serve", f"{QWEN}-hopper", "ready", hopper.port)
+    url = "/v1/chat/completions"
+
+    pref, pref_server = start_router()
+    pref.acquire(QWEN)  # one request already in flight on the preferred deployment
+    assert _request(pref_server.base_url + url, _chat())[1]["X-Slurmhelps-Deployment"] == QWEN
+
+    router, server = start_router(balance="least_inflight")
+    # idle: preference order breaks the tie
+    assert _request(server.base_url + url, _chat())[1]["X-Slurmhelps-Deployment"] == QWEN
+    router.acquire(QWEN)  # bw busy -> the next request goes to the idle hopper
+    assert _request(server.base_url + url, _chat())[1]["X-Slurmhelps-Deployment"] == f"{QWEN}-hopper"
+    router.acquire(f"{QWEN}-hopper")
+    router.acquire(f"{QWEN}-hopper")  # hopper now busier -> back to bw
+    assert _request(server.base_url + url, _chat())[1]["X-Slurmhelps-Deployment"] == QWEN
+    status = router.status()
+    assert status["balance"] == "least_inflight"
+    assert status["inflight"] == {QWEN: 1, f"{QWEN}-hopper": 2}  # finished requests released their slot
+    assert status["requests"] == {QWEN: 2, f"{QWEN}-hopper": 1}
+
+
+def test_least_inflight_still_fails_over(tmp_path, start_router, make_backend):
+    hopper = make_backend(QWEN)
+    _write_state(tmp_path / "serve", QWEN, "ready", _free_port())  # claims ready, nothing listens
+    _write_state(tmp_path / "serve", f"{QWEN}-hopper", "ready", hopper.port)
+    router, server = start_router(balance="least_inflight", cooldown_s=60)
+    status, headers, _ = _request(server.base_url + "/v1/chat/completions", _chat())
+    assert status == 200 and headers["X-Slurmhelps-Deployment"] == f"{QWEN}-hopper"
+    assert router.failovers == 1 and router.status()["inflight"] == {}
+
+
+def test_balance_mode_is_validated(tmp_path):
+    with pytest.raises(ValueError):
+        Router(tmp_path, balance="random")
+
+
 def test_connection_failure_fails_over_and_cools_down(tmp_path, start_router, make_backend):
     hopper = make_backend(QWEN)
     _write_state(tmp_path / "serve", QWEN, "ready", _free_port())  # claims ready, nothing listens
