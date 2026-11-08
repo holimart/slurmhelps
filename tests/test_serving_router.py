@@ -282,6 +282,46 @@ def test_least_inflight_still_fails_over(tmp_path, start_router, make_backend):
     assert router.failovers == 1 and router.status()["inflight"] == {}
 
 
+def test_stale_model_list_never_blocks_health(tmp_path, make_backend):
+    """A busy backend whose /v1/models hangs must not stall /health or routing once the
+    list is cached: the stale list is served and refreshed in the background."""
+    import time
+    from slurmhelps.serving import router as router_mod
+
+    backend = make_backend(QWEN)
+    _write_state(tmp_path / "serve", QWEN, "ready", backend.port)
+    clock = {"t": 1000.0}
+    router = Router(tmp_path / "serve", state_ttl_s=0.0, models_ttl_s=60.0, clock=lambda: clock["t"])
+    assert [i["name"] for i in router.ready()] == [QWEN]  # warms the cache
+
+    gate = threading.Event()
+    real = Router._probe_models
+
+    def slow(self, node, port):  # the backend is now busy
+        gate.wait(5.0)
+        return real(self, node, port)
+
+    Router._probe_models = slow  # type: ignore[method-assign]
+    try:
+        clock["t"] += 120.0  # cache is stale
+        t0 = time.monotonic()
+        status = router.status()
+        assert time.monotonic() - t0 < 1.0
+        assert status["status"] == "ok" and status["models"] == [QWEN]
+        assert router._refreshing == {QWEN}  # one refresh in flight, not one per call
+        router.status()
+        assert router._refreshing == {QWEN}
+    finally:
+        gate.set()
+        Router._probe_models = real  # type: ignore[method-assign]
+    for _ in range(50):
+        if not router._refreshing:
+            break
+        time.sleep(0.1)
+    assert not router._refreshing and router._models_cache[QWEN][0] == 1120.0
+    assert router_mod  # module imported for the patch above
+
+
 def test_balance_mode_is_validated(tmp_path):
     with pytest.raises(ValueError):
         Router(tmp_path, balance="random")

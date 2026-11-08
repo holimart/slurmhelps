@@ -194,6 +194,7 @@ class Router:
         self._models_cache: dict[str, tuple[float, tuple[Any, ...], list[dict[str, Any]]]] = {}
         self.counters: dict[str, int] = {}
         self._inflight: dict[str, int] = {}
+        self._refreshing: set[str] = set()
         self.failovers = 0
 
     # -- discovery -------------------------------------------------------------
@@ -278,6 +279,11 @@ class Router:
         cached = self._models_cache.get(name)
         if cached is not None and cached[1] == key and now - cached[0] < self.models_ttl_s:
             return cached[2]
+        if cached is not None and cached[1] == key:
+            # Stale but for the same job/node/port: answer from it and refresh in the
+            # background, so /health and request routing never wait on a busy backend.
+            self._refresh_models_async(name, key, node, port)
+            return cached[2]
         data = self._probe_models(node, port)
         if data:
             self._models_cache[name] = (now, key, data)
@@ -285,6 +291,27 @@ class Router:
         entry = self.catalog.get(name)
         fallback = (entry.served_model_name if entry else "") or name
         return [{"id": fallback, "object": "model", "owned_by": "slurmhelps"}]
+
+    def _refresh_models_async(self, name: str, key: tuple[Any, ...], node: str, port: int) -> None:
+        with self._lock:
+            if name in self._refreshing:
+                return
+            self._refreshing.add(name)
+
+        def work() -> None:
+            try:
+                data = self._probe_models(node, port)
+                if data:
+                    self._models_cache[name] = (self.clock(), key, data)
+                else:  # keep serving the old list; retry on the next lookup after a short pause
+                    old = self._models_cache.get(name)
+                    if old is not None:
+                        self._models_cache[name] = (self.clock() - self.models_ttl_s + 5.0, old[1], old[2])
+            finally:
+                with self._lock:
+                    self._refreshing.discard(name)
+
+        threading.Thread(target=work, name=f"models-refresh-{name}", daemon=True).start()
 
     def _probe_models(self, node: str, port: int) -> list[dict[str, Any]] | None:
         conn = http.client.HTTPConnection(node, port, timeout=min(self.connect_timeout_s, 5.0))
