@@ -434,6 +434,13 @@ class Scan:
         files = dirs = links = other = 0
         try:
             it = os.scandir(src)
+        except FileNotFoundError:
+            # A live workset is being written while it is scanned: a directory (e.g. a lane's git
+            # worktree) can vanish between its parent's listing and this call. It holds nothing to
+            # record, and failing here lost a whole final spill (2026-11-09). Any other error stays fatal.
+            with self._lock:
+                self.notes.append(f"vanished during scan: {src}")
+            return subdirs
         except OSError as exc:
             raise WSError(f"cannot list {src}: {exc}") from exc
         with it:
