@@ -115,6 +115,9 @@ class Node:
     state: str
     gpu_rank: int
     partition_rank: int
+    # Share of this node's GPUs already allocated (0.0 = all free). Used only as a tie-break
+    # after the configured ranks, so a node with every GPU free is offered before a crowded one.
+    used_share: float = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -293,7 +296,8 @@ def probe_gpus(
       ``AllowAccounts`` (``ALL`` or the account).
 
     Each node is de-duplicated to its cheapest ``(gpu_rank, partition_rank)``
-    occurrence, then sorted by ``(gpu_rank, partition_rank, node)``.
+    occurrence, then sorted by ``(gpu_rank, partition_rank, used_share, node)``: among equally
+    ranked nodes, the one with the largest share of GPUs free comes first.
     """
     ranks = dict(gpu_rank or {})
     pranks = dict(partition_rank or {})
@@ -313,10 +317,16 @@ def probe_gpus(
         state = parts[3].strip()
         if not node:
             continue
-        if state != "idle":
+        # Slurm appends flags to a node state; "-" means the backfill scheduler has
+        # PLANNED the node for a higher-priority job, which does not stop us starting a job
+        # on a free GPU there. Other flags ("*" not responding, "@" pending reboot, "~"/"#"/"%"
+        # power states, "$" maintenance, "^" rebooting) still disqualify the node. Without
+        # this, a busy cluster where nearly every node is "mix-" refuses every submit.
+        base_state = state[:-1] if state.endswith("-") else state
+        if base_state != "idle":
             # "mix" qualifies only when sinfo shows a GPU still free on it.
             total = _gpu_count(gres)
-            if state != "mix" or total is None or node not in gpus_used:
+            if base_state != "mix" or total is None or node not in gpus_used:
                 continue
             if gpus_used[node] >= total:
                 continue
@@ -330,6 +340,10 @@ def probe_gpus(
             continue
         if not _partition_permitted(partition, allowed_partition, account, allow_accounts):
             continue
+        gpu_total = _gpu_count(gres)
+        used_share = 0.0
+        if base_state != "idle" and gpu_total:
+            used_share = round(min(gpus_used.get(node, 0) / gpu_total, 1.0), 4)
         cand = Node(
             partition=partition,
             node=node,
@@ -337,6 +351,7 @@ def probe_gpus(
             state=state,
             gpu_rank=_gpu_rank(model, canonical, ranks),
             partition_rank=_partition_rank(partition, pranks),
+            used_share=used_share,
         )
         best = candidates.get(node)
         better = best is None or (cand.gpu_rank, cand.partition_rank) < (
@@ -345,7 +360,10 @@ def probe_gpus(
         )
         if better:
             candidates[node] = cand
-    return sorted(candidates.values(), key=lambda n: (n.gpu_rank, n.partition_rank, n.node))
+    return sorted(
+        candidates.values(),
+        key=lambda n: (n.gpu_rank, n.partition_rank, n.used_share, n.node),
+    )
 
 
 def select_gpu(

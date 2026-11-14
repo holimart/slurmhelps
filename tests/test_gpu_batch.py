@@ -91,6 +91,60 @@ def test_probe_accepts_mix_node_only_with_a_free_gpu(monkeypatch: pytest.MonkeyP
     assert {n.node for n in nodes} == {"mixFree", "mixPart"}
 
 
+def test_probe_accepts_backfill_planned_mix_nodes_but_not_other_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # "mix-" = planned by the backfill scheduler (nearly every node on a busy cluster):
+    # usable when a GPU is free. "mix@" (pending reboot) and "mix*" (not responding) are not.
+    sinfo = "\n".join(
+        [
+            "gpu|planFree|gpu:L40:2(S:0-1)|mix-|up",
+            "gpu|planFull|gpu:L40:2(S:0-1)|mix-|up",
+            "gpu|idlePlan|gpu:L40:1|idle-|up",
+            "gpu|reboot|gpu:L40:2(S:0-1)|mix@|up",
+            "gpu|silent|gpu:L40:2(S:0-1)|mix*|up",
+            "gpu|drained|gpu:L40:2(S:0-1)|drain|up",
+        ]
+    )
+    used = "\n".join(
+        [
+            "planFree     gpu:L40:0(IDX:N/A),vram:0",
+            "planFull     gpu:L40:2(IDX:0-1),vram:0",
+            "idlePlan     gpu:L40:0(IDX:N/A),vram:0",
+            "reboot       gpu:L40:0(IDX:N/A),vram:0",
+            "silent       gpu:L40:0(IDX:N/A),vram:0",
+        ]
+    )
+    rec = _install(monkeypatch, sinfo)
+    rec.replies[gpu_batch._SINFO_USED_CMD] = used
+    nodes = gpu_batch.probe_gpus("user@host")
+    assert {n.node for n in nodes} == {"planFree", "idlePlan"}
+
+
+def test_probe_offers_the_least_used_node_first_among_equal_ranks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sinfo = "\n".join(
+        [
+            "gpu|aaCrowded|gpu:L40:3(S:0)|mix-|up",
+            "gpu|bbHalf|gpu:L40:2(S:0-1)|mix-|up",
+            "gpu|zzEmpty|gpu:L40:2(S:0-1)|mix-|up",
+            "gpu|yyIdle|gpu:L40:1|idle|up",
+        ]
+    )
+    used = "\n".join(
+        [
+            "aaCrowded    gpu:L40:2(IDX:1-2),vram:0",
+            "bbHalf       gpu:L40:1(IDX:0),vram:0",
+            "zzEmpty      gpu:L40:0(IDX:N/A),vram:0",
+        ]
+    )
+    rec = _install(monkeypatch, sinfo)
+    rec.replies[gpu_batch._SINFO_USED_CMD] = used
+    nodes = gpu_batch.probe_gpus("user@host")
+    assert [n.node for n in nodes] == ["yyIdle", "zzEmpty", "bbHalf", "aaCrowded"]
+
+
 def test_probe_enforces_allow_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
     sinfo = "\n".join(
         [

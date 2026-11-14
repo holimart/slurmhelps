@@ -370,7 +370,9 @@ def list_free_gpu_nodes(
             continue
         if node in excluded:
             continue
-        if state not in FREE_NODE_STATES:
+        # "-" = planned by the backfill scheduler: still usable (see gpu_batch.probe_gpus);
+        # every other state flag ("*", "@", "~", "#", "%", "$", "^") keeps the node out.
+        if (state[:-1] if state.endswith("-") else state) not in FREE_NODE_STATES:
             continue
         total = parse_gpu_counts(gres)
         busy = parse_gpu_counts(used)

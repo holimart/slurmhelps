@@ -154,6 +154,26 @@ def test_plan_skips_fuuk_and_r50_and_picks_first_free(slurm):
     assert p.cap_ok
 
 
+def test_plan_counts_backfill_planned_nodes_but_not_other_state_flags(slurm):
+    # "mix-" = planned by the backfill scheduler (most nodes on a busy cluster): usable when a
+    # GPU is free. "mix@" (pending reboot) and "mix*" (not responding) must stay excluded.
+    st = slurm["state"]
+    _sinfo(
+        st,
+        "ffa-preempt",
+        [
+            _row("uk-g6-01", "gpu:nvidia_l40s:2(S:0-1)", "gpu:nvidia_l40s:0", "mix-"),
+            _row("uk-g6-02", "gpu:nvidia_l40s:2(S:0-1)", "gpu:nvidia_l40s:0", "mix@"),
+            _row("uk-g6-03", "gpu:nvidia_l40s:2(S:0-1)", "gpu:nvidia_l40s:0", "mix*"),
+        ],
+    )
+    _sinfo(st, "ffa-checkpoint", [])
+    _sinfo(st, "gpu-ffa", [])
+    _set(st, "squeue.txt", "")
+    p = sg.plan(sg.load_policy(slurm["root"]))
+    assert p.node_candidates == ["uk-g6-01"]
+
+
 def test_plan_partition_without_free_gpu_is_skipped_for_cheaper_free_one(slurm):
     st = slurm["state"]
     _sinfo(
