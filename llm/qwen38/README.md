@@ -77,14 +77,22 @@ survive a job restart only while the node and port stay the same.
 | deployment | config | GPUs | node port | state dir | status |
 |---|---|---|---|---|---|
 | `bw` | `config-bw.json` | 2× BW6000 96 GB, bw01 | 8010 | `.slurmhelps-serve/qwen38-flash-next` | production |
-| `hopper` | `config-hopper.json` | 2× H100 80 GB, hopper01 (`--gres=gpu:H100:2`) | 8020 | `.slurmhelps-serve/qwen38-flash-next-hopper` | **blocked** |
+| `hopper` | `config-hopper.json` | 2× H100 80 GB, hopper01 (`--gres=gpu:H100:2`) | 8020 | `.slurmhelps-serve/qwen38-flash-next-hopper` | production (reserved for Qwen) |
 
 `serve.sh` selects a deployment with `--target bw|hopper` (default `bw`, which
-behaves exactly as before). Hopper `up` is refused: this container loads the
-NVFP4-CSF experts and the NVFP4 PLE table only through b12x kernels, which run
-on SM120/121 only. See
+behaves exactly as before). Both deployments are meant to run at the same time,
+so that at least one is up whenever possible.
+
+**What "blocked" meant.** hopper01 is blocked for the ADGFEM experiments, so
+that those do not clash with the Qwen deployments: the H100s are reserved for
+Qwen, like bw01. It does not mean the deployment cannot run. The hopper target
+uses the upstream vLLM nightly container (`serve-container-hopper.sh`, Marlin
+W4A16 MoE experts, SM90, no b12x kernels) and served on 2026-11-07 (KV cache
+1.9 M tokens, 7.3x concurrency at 262,144 tokens; see
+`experiments/data/2026-11-07-qwen38-hopper`). The feasibility note
 [`experiments/2026-11-06-qwen38-hopper.md`](experiments/2026-11-06-qwen38-hopper.md)
-for the evidence and what an SM90 build would need.
+is about the earlier b12x container only, whose NVFP4-CSF experts run on
+SM120/121 only, and is superseded for hopper by the nightly container.
 
 The **router** runs on the login node at `127.0.0.1:18000`, bound to loopback
 only. It discovers every deployment under `.slurmhelps-serve/*/state.json`;
@@ -147,7 +155,8 @@ On the login node itself, use `http://127.0.0.1:18000/v1` directly.
 2. Never submit to the L40 nodes (ampere01/03, fuuk-*, uk-g6-*, mff-a2-19,
    ucjf-a4-01). They are reserved for experiments. Hopper jobs are pinned with
    `--gres=gpu:H100:2`; hopper01 is the only H100 node.
-3. bw01 (Blackwell) stays reserved for Qwen.
+3. bw01 (Blackwell) and hopper01 (H100) stay reserved for Qwen; ADGFEM
+   experiments do not run on them.
 4. Do not modify, cancel or resubmit a running or pending deployment job to
    make room for another one. If a job pends for RAM or GPU, report it; do not
    raise its priority.
