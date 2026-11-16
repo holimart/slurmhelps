@@ -158,6 +158,13 @@ class Worker:
         # preempted run left behind; record the requeue so preempted ->
         # requeued -> starting stays inside ALLOWED_TRANSITIONS.
         prior = (self.store.read() or {}).get("state")
+        if prior in ("starting", "loading", "warming", "ready", "draining"):
+            # The previous run was killed (hard preemption) before it could
+            # record "preempted": the state file still says it was running.
+            # Without this the worker died with "invalid serving
+            # transition: ready -> starting" (job 38579681, 2026-11-16).
+            self._set(state="preempted", phase="preempted", job_id=self.spec.job_id)
+            prior = "preempted"
         if prior == "preempted":
             self._set(state="requeued", phase="requeued", job_id=self.spec.job_id)
         self._set(
