@@ -118,3 +118,25 @@ def test_worker_restarts_after_preemption_via_requeued(tmp_path):
     worker, _proc = make_worker(tmp_path, health=lambda n: n >= 2)
     state = worker.wait_ready(run_until_ready=True)
     assert state["state"] == "ready"
+
+
+def test_worker_restarts_over_a_state_the_killed_run_never_closed(tmp_path):
+    # Hard preemption kills the worker before it can write "preempted": the
+    # requeued job finds a running state and must not die with an invalid
+    # transition (job 38579681, 2026-11-16: ready -> starting).
+    for stale in ("starting", "loading", "warming", "ready", "draining"):
+        sub = tmp_path / stale
+        sub.mkdir()
+        store = StateStore(sub)
+        store.update(state="starting", job_id="123")
+        if stale != "starting":
+            store.update(state="loading", job_id="123")
+        if stale in ("warming", "ready", "draining"):
+            store.update(state="warming", job_id="123")
+        if stale in ("ready", "draining"):
+            store.update(state="ready", job_id="123")
+        if stale == "draining":
+            store.update(state="draining", job_id="123")
+        worker, _proc = make_worker(sub, health=lambda n: n >= 2)
+        state = worker.wait_ready(run_until_ready=True)
+        assert state["state"] == "ready", stale

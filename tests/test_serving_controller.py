@@ -104,6 +104,26 @@ def test_submit_parses_job_id_writes_queued_and_refuses_live(store, clock):
     assert forced["attempt"] == 2
 
 
+def test_submit_keeps_state_the_worker_already_advanced(store, clock):
+    """A job that starts before sbatch returns must not be reset to queued.
+
+    Regression for job 38414001 (2026-11-14): the login side overwrote the
+    worker's starting state with queued and the worker then died with
+    "invalid serving transition: queued -> loading".
+    """
+
+    def sbatch(argv):
+        store.write({"job_id": "777", "state": "starting", "phase": "starting"})
+        return ok("777\n")
+
+    runner = ScriptedRunner({"sbatch": sbatch})
+    ctl = make_controller(store, runner, clock)
+    state = ctl.submit("/tmp/serve.sbatch")
+    assert state["job_id"] == "777"
+    assert state["state"] == "starting"
+    assert store.read()["state"] == "starting"
+
+
 def test_submit_wraps_a_command_in_a_generated_script(store, clock, tmp_path):
     runner = ScriptedRunner({"sbatch": ok("9001\n")})
     ctl = make_controller(store, runner, clock)

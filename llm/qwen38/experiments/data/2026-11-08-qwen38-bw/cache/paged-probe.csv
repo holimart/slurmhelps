@@ -1,0 +1,4 @@
+prefix_tokens,status,suffix_tokens,fill_ttft_s,expected_new_tokens,incremental_prefill_tok_s,cumulative_fill_s,hit_ttft_s,hit_reuse_ratio,hit_suffix_prefill_tok_s,hit_decode_tok_s,hit_output_tokens,repeat_ttft_s,repeat_reuse_ratio,inferred_miss_ttft_s
+50000,ok,128,4.1736,50000,11980.0,4.1736,0.5902,7.07,216.87,161.99,128,0.1781,3.31,4.7638
+100000,ok,128,4.335,50000,11533.97,8.5086,0.7162,6.05,178.71,99.59,128,2.5247,0.28,9.2249
+200000,ok,128,8.4348,100000,11855.69,16.9434,0.8326,10.13,153.74,125.49,128,0.9357,0.89,17.776

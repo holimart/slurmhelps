@@ -434,6 +434,13 @@ class Scan:
         files = dirs = links = other = 0
         try:
             it = os.scandir(src)
+        except FileNotFoundError:
+            # A live workset is being written while it is scanned: a directory (e.g. a lane's git
+            # worktree) can vanish between its parent's listing and this call. It holds nothing to
+            # record, and failing here lost a whole final spill (2026-11-09). Any other error stays fatal.
+            with self._lock:
+                self.notes.append(f"vanished during scan: {src}")
+            return subdirs
         except OSError as exc:
             raise WSError(f"cannot list {src}: {exc}") from exc
         with it:
@@ -831,17 +838,29 @@ def _stage_from(k: Kind, img: Path) -> Dict[str, Any]:
     k.stage.mkdir(parents=True, exist_ok=True, mode=0o700)
     man = read_json(Path(str(img) + ".manifest.json")) or {}
     size = img.stat().st_size
-    need = size + int((man.get("image") or {}).get("bytes") or size * 3)
-    if free_bytes(k.stage) < need:
-        raise WSError(f"not enough node-local space in {k.stage}: need ~{human(need)}, "
-                      f"free {human(free_bytes(k.stage))} (tmp counts against --mem)")
+    unpacked = int((man.get("image") or {}).get("bytes") or size * 3)
+    need = size + unpacked
+    free = free_bytes(k.stage)
+    direct = False  # True: unpack straight from the shared image, no node-local copy of the .sqfs
+    if free < need:
+        # Tight node-local space (e.g. a 768 GB node whose tmpfs is half of RAM): the local copy of the
+        # image is only a speed-up, so drop it when the unpacked tree plus headroom still fits.
+        headroom = int(k.cfg.get("direct_unpack_headroom_bytes", 20 << 30))
+        if free < unpacked + headroom:
+            raise WSError(f"not enough node-local space in {k.stage}: need ~{human(need)} "
+                          f"(or ~{human(unpacked + headroom)} unpacking straight from the shared image), "
+                          f"free {human(free)} (tmp counts against --mem)")
+        direct = True
+        log(f"WARN {k.kind}: node-local free {human(free)} < {human(need)}; unpacking {img} directly "
+            f"(no local copy of the image; needs ~{human(unpacked)} + {human(headroom)} headroom)")
     stamp = k.stage / f"{k.kind}.staged.json"
     old = read_json(stamp)
     if old and k.root.is_dir() and old.get("image_mtime") == img.stat().st_mtime and old.get("image_size") == size:
         log(f"{k.kind}: {k.root} already holds {img} (same job); reusing it")
         return old
-    copy = k.stage / f"{k.kind}.sqfs"
-    copy_file(img, copy, durable=False)
+    copy = img if direct else k.stage / f"{k.kind}.sqfs"
+    if not direct:
+        copy_file(img, copy, durable=False)
     t_copy = time.monotonic() - t0
     tmp_root = k.stage / f"{k.kind}-root.unpacking"
     if tmp_root.exists():
@@ -859,7 +878,7 @@ def _stage_from(k: Kind, img: Path) -> Dict[str, Any]:
     if k.root.exists():
         shutil.rmtree(k.root)
     os.replace(tmp_root, k.root)
-    if not k.cfg.get("keep_stage_copy"):
+    if not k.cfg.get("keep_stage_copy") and not direct:  # direct: `copy` IS the shared image -- never delete it
         copy.unlink()
     inner = read_json(k.root / MANIFEST_IN_IMAGE) or {}
     rec = {"image": str(img), "image_mtime": img.stat().st_mtime, "image_size": size, "root": str(k.root),

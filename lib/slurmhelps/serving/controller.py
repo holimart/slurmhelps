@@ -224,6 +224,17 @@ class Controller:
             detail = err.strip() or out.strip() or f"exit {rc}"
             raise RuntimeError(f"sbatch failed: {detail}")
 
+        # A job that starts instantly (idle node) can already have written
+        # starting/loading under this job id before sbatch returned here.
+        # Overwriting that with "queued" made the worker die with "invalid
+        # serving transition: queued -> loading" (job 38414001, 2026-11-14).
+        current = self.store.read() or {}
+        if (
+            str(current.get("job_id") or "") == str(job_id)
+            and current.get("state") not in (None, "queued")
+        ):
+            return current
+
         attempt = int((previous or {}).get("attempt") or 0) + 1
         state = default_state()
         state.update(

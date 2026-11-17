@@ -240,24 +240,13 @@ class GatewayServer:
         Bodies that are not a JSON object are passed through unchanged; the
         upstream rejects them anyway.
         """
-        if not (self.bad_words or self.rewriter) or not body or not self.is_completion(method, raw_path):
+        if not self.is_completion(method, raw_path):
             return body
-        try:
-            payload = json.loads(body)
-        except ValueError:
-            return body
-        if not isinstance(payload, dict):
-            return body
-        if self.bad_words:
-            existing = payload.get("bad_words")
-            merged = _clean_words(existing if isinstance(existing, list) else [])
-            merged += [word for word in self.bad_words if word not in merged]
-            payload["bad_words"] = merged
+        out, injected = guard_request_body(body, self.bad_words, self.rewriter, request_id)
+        if injected:
             with self._lock:
                 self._injected += 1
-        if self.rewriter:
-            self.rewriter.scrub_request(payload, request_id)
-        return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return out
 
     def inject_bad_words(self, method: str, raw_path: str, body: bytes) -> bytes:
         """Back-compat alias used by older callers and tests."""
@@ -275,6 +264,35 @@ class GatewayServer:
         return hmac.compare_digest(
             token.strip().encode("utf-8"), self.api_key.encode("utf-8")
         )
+
+
+def guard_request_body(
+    body: bytes, bad_words: list[str], rewriter: Rewriter | None, request_id: str = ""
+) -> tuple[bytes, bool]:
+    """Merge ``bad_words`` into, and scrub the history of, one completion body.
+
+    Returns ``(body, bad_words_injected)``. Bodies that are not a JSON object
+    pass through unchanged. Idempotent: guarding an already guarded body gives
+    the same body (the merge de-duplicates; the rewrite rules and history
+    repairs leave their own output alone), so a router and a node gateway can
+    both apply it.
+    """
+    if not (bad_words or rewriter) or not body:
+        return body, False
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return body, False
+    if not isinstance(payload, dict):
+        return body, False
+    if bad_words:
+        existing = payload.get("bad_words")
+        merged = _clean_words(existing if isinstance(existing, list) else [])
+        merged += [word for word in bad_words if word not in merged]
+        payload["bad_words"] = merged
+    if rewriter:
+        rewriter.scrub_request(payload, request_id)
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8"), bool(bad_words)
 
 
 def _clean_words(words: Any) -> list[str]:

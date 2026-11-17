@@ -1,0 +1,100 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-11-07T22:32:08.293216+00:00",
+  "server": {
+    "base_url": "http://hopper01:8020",
+    "model": "qwen38-flash-next",
+    "endpoint": "/v1/completions",
+    "metrics_url": "http://hopper01:8020/metrics"
+  },
+  "workload": {
+    "isl": 235929,
+    "osl": 128,
+    "shared_prefix": 0,
+    "cache_regime": "cold",
+    "request_rate": "inf",
+    "stream": true,
+    "ignore_eos": true,
+    "runs": 1,
+    "prompt_factor": 5,
+    "min_prompts": 1,
+    "max_prompts": 1,
+    "workers": 1,
+    "slo": {
+      "ttft_ms": 2000.0,
+      "tpot_ms": 80.0
+    }
+  },
+  "points": [
+    {
+      "concurrency": 1,
+      "runs": [
+        {
+          "completed": 1,
+          "failed": 0,
+          "duration_s": 17.6321,
+          "output_tokens": 128,
+          "input_tokens": 246724,
+          "output_tokens_per_s": 7.26,
+          "total_tokens_per_s": 14000.18,
+          "prefill_tokens_per_s": 14828.7,
+          "decode_tokens_per_s": 129.715,
+          "request_throughput": 0.057,
+          "ttft_ms": {
+            "mean": 16638.276,
+            "p50": 16638.276,
+            "p90": 16638.276,
+            "p99": 16638.276
+          },
+          "tpot_ms": {
+            "mean": 7.77,
+            "p50": 7.77,
+            "p90": 7.77,
+            "p99": 7.77
+          },
+          "e2e_ms": {
+            "p50": 17625.051,
+            "p99": 17625.051
+          },
+          "goodput_req_per_s": 0.0,
+          "slo_attainment": 0.0,
+          "slo": {
+            "ttft_ms": 2000.0,
+            "tpot_ms": 80.0
+          },
+          "concurrency": 1,
+          "run": 1,
+          "num_prompts": 1,
+          "warmup": 1,
+          "cache_regime": "cold",
+          "prefix_cache": {}
+        }
+      ],
+      "median": {
+        "output_tokens_per_s": 7.26,
+        "total_tokens_per_s": 14000.18,
+        "prefill_tokens_per_s": 14828.7,
+        "decode_tokens_per_s": 129.715,
+        "request_throughput": 0.057,
+        "goodput_req_per_s": 0.0,
+        "slo_attainment": 0.0,
+        "ttft_ms": {
+          "mean": 16638.276,
+          "p50": 16638.276,
+          "p90": 16638.276,
+          "p99": 16638.276
+        },
+        "tpot_ms": {
+          "mean": 7.77,
+          "p50": 7.77,
+          "p90": 7.77,
+          "p99": 7.77
+        },
+        "e2e_ms": {
+          "p50": 17625.051,
+          "p99": 17625.051
+        }
+      }
+    }
+  ]
+}

@@ -72,6 +72,97 @@ using the new node from `serve.sh status --json` or `serve.sh endpoint`. A
 tunnel targets `host:port`, not a Slurm job ID, so an already open tunnel can
 survive a job restart only while the node and port stay the same.
 
+## Two deployments and the login-node router
+
+| deployment | config | GPUs | node port | state dir | status |
+|---|---|---|---|---|---|
+| `bw` | `config-bw.json` | 2× BW6000 96 GB, bw01 | 8010 | `.slurmhelps-serve/qwen38-flash-next` | production |
+| `hopper` | `config-hopper.json` | 2× H100 80 GB, hopper01 (`--gres=gpu:H100:2`) | 8020 | `.slurmhelps-serve/qwen38-flash-next-hopper` | production (reserved for Qwen) |
+
+`serve.sh` selects a deployment with `--target bw|hopper` (default `bw`, which
+behaves exactly as before). Both deployments are meant to run at the same time,
+so that at least one is up whenever possible.
+
+**What "blocked" meant.** hopper01 is blocked for the ADGFEM experiments, so
+that those do not clash with the Qwen deployments: the H100s are reserved for
+Qwen, like bw01. It does not mean the deployment cannot run. The hopper target
+uses the upstream vLLM nightly container (`serve-container-hopper.sh`, Marlin
+W4A16 MoE experts, SM90, no b12x kernels) and served on 2026-11-07 (KV cache
+1.9 M tokens, 7.3x concurrency at 262,144 tokens; see
+`experiments/data/2026-11-07-qwen38-hopper`). The feasibility note
+[`experiments/2026-11-06-qwen38-hopper.md`](experiments/2026-11-06-qwen38-hopper.md)
+is about the earlier b12x container only, whose NVFP4-CSF experts run on
+SM120/121 only, and is superseded for hopper by the nightly container.
+
+The **router** runs on the login node at `127.0.0.1:18000`, bound to loopback
+only. It discovers every deployment under `.slurmhelps-serve/*/state.json`;
+`llm/models.json` supplies metadata, ports and guards, and deployments missing
+from the catalogue are found too. A deployment counts as ready when its state
+is `ready` with a fresh heartbeat.
+
+- **Routing:** each request goes by its OpenAI `model` field.
+  - `qwen38-flash-next` goes to `qwen38-flash-next` (bw) first, then to
+    `qwen38-flash-next-hopper`. Change the order with `--prefer`; map extra
+    names to a served model with `--alias NAME=MODEL`.
+  - Other names go to whichever deployment serves them. Unknown names get 404
+    `model_not_found`.
+  - `/v1/models` is the union of the ready deployments' models.
+  - `/health` returns 200 when anything is ready and 503 `"no ready
+    deployment"` otherwise.
+  - `/router/status` lists every deployment found, with its state and the
+    reason it is not ready.
+- **Failover:** a connection failure skips that deployment for 30 s and the
+  router tries the next one.
+- **Authentication:** the router adds no API key and passes `Authorization`
+  headers through.
+
+**Guards.** For a model with `guards` in `models.json` (qwen38:
+`bad_words.json` and `rewrite_rules.json`), the router applies the node
+gateway's guards in-process, reusing the gateway code:
+
+- **Requests:** bad_words are merged in and the history is scrubbed, with
+  shellguard and privguard repairs.
+- **Responses:** JSON and SSE are rewritten; streams stay streams.
+
+A deployment started with `QWEN38_GATEWAY=0` is therefore still guarded. The
+guards are idempotent, so they also run when the node gateway is on, and tests
+check that the result is the same as applying them once. Router rewrites are
+logged to `.slurmhelps-serve/router/rewrites-<model>.jsonl`.
+
+```bash
+llm/qwen38/router.sh start    # background; pid/log in .slurmhelps-serve/router/
+llm/qwen38/router.sh status   # active deployment + per-deployment reason
+llm/qwen38/router.sh stop
+```
+
+To connect a client, tunnel to the router on the login node instead of to a
+compute node. The tunnel then survives preemption, requeue and a switch between
+deployments:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -L 8010:127.0.0.1:18000 "$USER@hpc-head.troja.mff.cuni.cz"
+curl -s http://127.0.0.1:8010/v1/models     # served name: qwen38-flash-next
+```
+
+On the login node itself, use `http://127.0.0.1:18000/v1` directly.
+
+### Operator rules
+
+1. Every Qwen job is preemptible and lowest priority: partition `ffa-preempt`
+   only, `--requeue`, `--nice=100`. Never `gpu-ffa`, `gpu-ffa-preempt`,
+   `gpu-long` and so on.
+2. Never submit to the L40 nodes (ampere01/03, fuuk-*, uk-g6-*, mff-a2-19,
+   ucjf-a4-01). They are reserved for experiments. Hopper jobs are pinned with
+   `--gres=gpu:H100:2`; hopper01 is the only H100 node.
+3. bw01 (Blackwell) and hopper01 (H100) stay reserved for Qwen; ADGFEM
+   experiments do not run on them.
+4. Do not modify, cancel or resubmit a running or pending deployment job to
+   make room for another one. If a job pends for RAM or GPU, report it; do not
+   raise its priority.
+5. Git: never force-push, never re-add an `upstream` remote, no git hooks.
+   Commit with path-scoped commits on a branch.
+
 ## Measure
 
 Once ready:
