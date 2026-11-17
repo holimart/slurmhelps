@@ -33,6 +33,16 @@ Guards
     running without its node gateway is still guarded. The guards are
     idempotent, so they are applied whether or not a node gateway also runs
     (defence in depth; nothing to detect or trust on the node side).
+    A deployment whose engine has no ``bad_words`` sampling parameter (e.g.
+    Strata) sets ``"guards": {"request_bad_words": false}`` on its own
+    catalogue entry: it still gets the history scrub and the response
+    rewrite, but no ``bad_words`` field is sent to it.
+
+Model ids
+    A catalogue entry with ``"rewrite_model": true`` is routed under its
+    ``served_model_name`` even when its backend reports another id in
+    ``/v1/models`` (Strata names the IQ3_S pack ``qwen3.8-flash-next-iq3_s``);
+    the request's ``model`` is rewritten to the backend's first reported id.
 
 Headers, including ``Authorization``, are passed through and never logged;
 the router adds no key. The listener binds loopback unless
@@ -72,6 +82,10 @@ class CatalogEntry:
     gpus: str = ""
     port: int | None = None
     served_model_name: str = ""
+    # False: the engine has no ``bad_words`` parameter; never send the field.
+    request_bad_words: bool = True
+    # True: route under served_model_name, rewrite ``model`` to the backend's id.
+    rewrite_model: bool = False
 
 
 @dataclass
@@ -116,11 +130,14 @@ def load_catalog(
             cfg = ServingConfig.from_mapping(json.loads((root / config).read_text(encoding="utf-8")))
             name, port = cfg.model, cfg.port
         served = str(meta.get("served_model_name") or "")
+        spec = meta.get("guards")
         entries.append(CatalogEntry(name=name, model_id=model_id,
                                     display_name=str(meta.get("display_name") or ""),
                                     gpus=str(meta.get("gpus") or ""), port=port,
-                                    served_model_name=served))
-        spec = meta.get("guards")
+                                    served_model_name=served,
+                                    request_bad_words=bool(spec.get("request_bad_words", True))
+                                    if isinstance(spec, dict) else True,
+                                    rewrite_model=bool(meta.get("rewrite_model", False))))
         if isinstance(spec, dict) and served and served not in guards:
             guards[served] = build_guard(served, spec, root, rewrite_log_dir)
     return entries, guards
@@ -253,6 +270,8 @@ class Router:
             "ready": False,
             "reason": "",
             "models": [],
+            # served name -> the id the backend reports (``rewrite_model`` entries only)
+            "model_map": {},
         }
         cooldown = self._cooldown_until.get(name, 0.0) - now
         if not state:
@@ -270,6 +289,10 @@ class Router:
         else:
             info["ready"] = True
             info["models"] = [m["id"] for m in self.served_models(name, node, port, state)]
+            served = entry.served_model_name if entry else ""
+            if entry and entry.rewrite_model and served and info["models"] and served not in info["models"]:
+                info["model_map"] = {served: info["models"][0]}
+                info["models"] = [served, *info["models"]]
         return info
 
     def served_models(self, name: str, node: str, port: int, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -352,6 +375,11 @@ class Router:
                 return self.guards[served]
         return None
 
+    def request_bad_words(self, name: str) -> bool:
+        """Whether deployment ``name``'s engine takes a ``bad_words`` field."""
+        entry = self.catalog.get(name)
+        return entry.request_bad_words if entry else True
+
     def order(self, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Try order for one request. ``prefer``: preference order (first ready
         wins, the rest are failover). ``least_inflight``: fewest requests in
@@ -393,6 +421,10 @@ class Router:
             for model in self.served_models(info["name"], info["node"], info["port"],
                                             states.get(info["name"]) or {}):
                 entry = union.setdefault(model["id"], {**model, "x_slurmhelps_deployments": []})
+                entry["x_slurmhelps_deployments"].append(info["name"])
+            for served in info["model_map"]:
+                entry = union.setdefault(served, {"id": served, "object": "model", "owned_by": "slurmhelps",
+                                                  "x_slurmhelps_deployments": []})
                 entry["x_slurmhelps_deployments"].append(info["name"])
         return list(union.values())
 
@@ -538,8 +570,15 @@ class _RouterHandler(_GatewayHandler):
             tried.append(info["name"])
             guard = router.guard_for(model, info) if completion else None
             out = body
+            bad_words_ok = router.request_bad_words(info["name"])
             if guard is not None:
-                out, _ = guard_request_body(body, guard.bad_words, guard.rewriter, request_id)
+                out, _ = guard_request_body(body, guard.bad_words if bad_words_ok else [],
+                                            guard.rewriter, request_id)
+            if completion and not bad_words_ok:
+                out = _drop_body_key(out, "bad_words")
+            upstream_model = info.get("model_map", {}).get(model) if model else None
+            if upstream_model:
+                out = _set_body_model(out, upstream_model)
             router.acquire(info["name"])
             try:
                 self._proxy_to(info, out, request_id, guard)
@@ -604,6 +643,18 @@ def _body_model(body: bytes) -> str | None:
         return None
     model = doc.get("model") if isinstance(doc, dict) else None
     return model if isinstance(model, str) and model else None
+
+
+def _drop_body_key(body: bytes, key: str) -> bytes:
+    """``body`` without top-level ``key`` (unchanged if absent or not a JSON object)."""
+    try:
+        doc = json.loads(body) if body else None
+    except ValueError:
+        return body
+    if not isinstance(doc, dict) or key not in doc:
+        return body
+    del doc[key]
+    return json.dumps(doc, separators=(",", ":")).encode("utf-8")
 
 
 def _set_body_model(body: bytes, model: str) -> bytes:

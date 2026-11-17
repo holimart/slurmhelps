@@ -472,3 +472,87 @@ def test_cli_router_status_reports_unreachable(capsys):
     rc = cli.main(["router", "--status", "--listen-port", str(_free_port())])
     assert rc == 3
     assert "router not answering" in capsys.readouterr().err
+
+
+# -- Strata fallback replica (qwen38-flash-next-strata-volta) ------------------------
+
+STRATA = f"{QWEN}-strata-volta"
+STRATA_ID = "qwen3.8-flash-next-iq3_s"  # the id Strata reports for the IQ3_S pack
+
+
+def test_catalogue_strata_volta_entry(catalog):
+    entries, guards = catalog
+    by_name = {e.name: e for e in entries}
+    entry = by_name[STRATA]
+    assert entry.port == 8030 and entry.served_model_name == QWEN
+    assert entry.rewrite_model and not entry.request_bad_words
+    # The vLLM deployments keep their defaults; the model's guard is still bw's.
+    assert by_name[QWEN].request_bad_words and not by_name[QWEN].rewrite_model
+    assert by_name[f"{QWEN}-hopper"].request_bad_words and not by_name[f"{QWEN}-hopper"].rewrite_model
+    assert [e.name for e in entries].index(STRATA) > [e.name for e in entries].index(f"{QWEN}-hopper")
+    assert list(guards) == [QWEN] and guards[QWEN].bad_words
+
+
+def test_least_inflight_spreads_onto_strata_with_model_rewrite_and_no_bad_words(
+        tmp_path, start_router, make_backend):
+    bw, hopper, strata = make_backend(QWEN), make_backend(QWEN), make_backend(STRATA_ID)
+    root = tmp_path / "serve"
+    _write_state(root, QWEN, "ready", bw.port)
+    _write_state(root, f"{QWEN}-hopper", "ready", hopper.port)
+    _write_state(root, STRATA, "ready", strata.port)
+    router, server = start_router(balance="least_inflight", prefer=[QWEN, f"{QWEN}-hopper", STRATA])
+    info = router.describe(STRATA)
+    assert info["ready"] and info["models"] == [QWEN, STRATA_ID]
+    assert info["model_map"] == {QWEN: STRATA_ID}
+    assert router.describe(QWEN)["model_map"] == {}
+    url = server.base_url + "/v1/chat/completions"
+
+    # All idle: preference order, the Strata fallback is last.
+    assert _request(url, _chat())[1]["X-Slurmhelps-Deployment"] == QWEN
+    router.acquire(QWEN)
+    router.acquire(f"{QWEN}-hopper")
+    request = {"model": QWEN, "messages": _history_with_violations(), "bad_words": ["client-word"]}
+    status, headers, body = _request(url, request)
+    assert status == 200 and headers["X-Slurmhelps-Deployment"] == STRATA
+    sent = strata.bodies[-1]
+    assert sent["model"] == STRATA_ID                      # rewritten to the backend's id
+    assert "bad_words" not in sent                         # Strata gets no bad_words at all
+    history = json.dumps(sent["messages"])
+    assert "aliyuncs" not in history and KEY not in history and NOTICE in history  # still scrubbed
+    content = json.loads(body)["choices"][0]["message"]["content"]
+    assert "aliyuncs" not in content and KEY not in content  # response rewrite still applies
+
+    status, headers, body = _request(url, _chat(stream=True))
+    assert status == 200 and headers["X-Slurmhelps-Deployment"] == STRATA
+    assert headers["Content-Type"].startswith("text/event-stream")
+    assert "aliyuncs" not in _sse_text(body)[0]
+
+    # The vLLM replicas are unchanged: served name kept, bad_words merged.
+    router.release(QWEN)
+    router.release(f"{QWEN}-hopper")
+    assert _request(url, {**_chat(), "bad_words": ["client-word"]})[1]["X-Slurmhelps-Deployment"] == QWEN
+    assert bw.bodies[-1]["model"] == QWEN and KEY in bw.bodies[-1]["bad_words"]
+    assert "client-word" in bw.bodies[-1]["bad_words"]
+
+    # The backend's own id routes too; /v1/models lists the served name on all three.
+    assert _request(url, _chat(STRATA_ID))[1]["X-Slurmhelps-Deployment"] == STRATA
+    assert strata.bodies[-1]["model"] == STRATA_ID
+    data = {m["id"]: m for m in json.loads(_request(server.base_url + "/v1/models")[2])["data"]}
+    assert data[QWEN]["x_slurmhelps_deployments"] == [QWEN, f"{QWEN}-hopper", STRATA]
+    assert data[STRATA_ID]["x_slurmhelps_deployments"] == [STRATA]
+
+
+def test_rewrite_model_is_opt_in(tmp_path, catalog, make_backend):
+    """Without ``rewrite_model`` a deployment reporting another id is not a replica of the
+    served name (the hopper/bw behaviour); with it, only when the id actually differs."""
+    entries, guards = catalog
+    other = make_backend(STRATA_ID)
+    root = tmp_path / "serve"
+    _write_state(root, f"{QWEN}-hopper", "ready", other.port)
+    router = Router(root, catalog=entries, guards=guards, state_ttl_s=0.0)
+    assert router.describe(f"{QWEN}-hopper")["models"] == [STRATA_ID]
+    assert router.candidates(QWEN) == []
+    same = make_backend(QWEN)
+    _write_state(root, STRATA, "ready", same.port)
+    info = router.describe(STRATA)
+    assert info["models"] == [QWEN] and info["model_map"] == {}
