@@ -96,7 +96,7 @@ and starts the node gateway on `$PORT` only once `/v1/models` lists the model
 (Strata's own `/health` answers 200 while still loading). SIGTERM stops the
 engine with `strata launch --stop`. The serving config has no node-list
 field; `--gres=gpu:V100:4` pins the job to volta05, the only node with four
-V100s (the other volta nodes have 1-2 cards). Memory is 360 GB of
+V100s (the other volta nodes have 1-2 cards). Memory is 355 GB (the most a job can get: MemSpecLimit keeps 16 GB) of
 volta05's 380 GB (raised from 320 GB on 2026-11-17 for the parked-conversation
 cache below): the ~84 GB staged pack counts against the job if `/tmp` is
 tmpfs, plus the PLE table in RAM (`--ple-io ram`, 28.8 GB), pinned KV and the

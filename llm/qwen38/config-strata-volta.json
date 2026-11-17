@@ -7,7 +7,7 @@
     "partition": "ffa-gpulab",
     "account": "ffa",
     "cpus": 32,
-    "mem": "360G",
+    "mem": "355G",
     "time": "12:00:00",
     "requeue": true,
     "nice": 100000,
