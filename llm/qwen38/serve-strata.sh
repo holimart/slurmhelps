@@ -53,6 +53,11 @@ UPORT=${STRATA_PORT:-$((PORT + 1))}
 CONTEXT=${MAX_MODEL_LEN:-262144}
 PARALLEL=${MAX_NUM_SEQS:-4}
 KV=${KV_DTYPE:-int8}
+# Parked-conversation cache (RAM) between requests. Strata's defaults (8 GiB, 4 slots) hold
+# only 2-3 agent conversations of 100-145k tokens, so 7 lanes evicted each other and every
+# tool call re-read ~100k prompt tokens (25-35 s); operator 2026-11-17: 192 GiB, 48 slots.
+CONV_CACHE_MIB=${STRATA_CONV_CACHE_MIB:-196608}
+CONV_CACHE_SLOTS=${STRATA_CONV_CACHE_SLOTS:-48}
 GPU_LIST=${STRATA_GPUS:-0,1,2,3}
 JOB=${SLURM_JOB_ID:-plan}
 TAG=strata-volta-$JOB
@@ -90,7 +95,8 @@ launch_args() { # data_dir -> the strata launch argv (one per line)
     --mtp on --gpu "$GPU_LIST" --kv "$KV" --vision off --access local --port "$UPORT" \
     --no-api-key --data-dir "$1" --yes --no-tui --restart \
     --set kv-resident=32768 --set expert-cache=auto --set prefill=auto \
-    --set ple-io=ram --set spec=4 --set spec-min-p=0.5 --set "mtp=$1/mtp/rt"
+    --set ple-io=ram --set spec=4 --set spec-min-p=0.5 --set "mtp=$1/mtp/rt" \
+    --set "conversation-cache-mib=$CONV_CACHE_MIB" --set "conversation-cache-slots=$CONV_CACHE_SLOTS"
 }
 
 if [ "$PLAN" = 1 ]; then

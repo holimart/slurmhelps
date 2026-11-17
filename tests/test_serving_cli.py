@@ -136,9 +136,9 @@ def test_qwen38_strata_volta_config_and_dry_run(tmp_path):
     assert plan["partition"] == "ffa-gpulab" and plan["gres"] == "gpu:V100:4"
     script = plan["sbatch"]
     for line in ("#SBATCH --partition=ffa-gpulab", "#SBATCH --gres=gpu:V100:4", "#SBATCH --nice=100000",
-                 "#SBATCH --time=12:00:00", "#SBATCH --requeue", "#SBATCH --mem=320G"):
+                 "#SBATCH --time=12:00:00", "#SBATCH --requeue", "#SBATCH --mem=355G"):
         assert line in script.splitlines(), (line, script)
-    assert "serve-strata.sh" in script and "PORT=8030" in script and "MAX_NUM_SEQS=4" in script
+    assert "serve-strata.sh" in script and "PORT=8030" in script and "MAX_NUM_SEQS=8" in script
     assert "KV_DTYPE=int8" in script and "--health-url http://127.0.0.1:8030/health" in script
     for bad in ("ffa-preempt", "gpu-ffa", "gpu-long"):
         assert bad not in script

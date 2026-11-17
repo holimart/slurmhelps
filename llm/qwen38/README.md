@@ -96,10 +96,21 @@ and starts the node gateway on `$PORT` only once `/v1/models` lists the model
 (Strata's own `/health` answers 200 while still loading). SIGTERM stops the
 engine with `strata launch --stop`. The serving config has no node-list
 field; `--gres=gpu:V100:4` pins the job to volta05, the only node with four
-V100s (the other volta nodes have 1-2 cards). Memory is 320 GB of
-volta05's 380 GB: the ~84 GB staged pack counts against the job if `/tmp` is
+V100s (the other volta nodes have 1-2 cards). Memory is 355 GB (the most a job can get: MemSpecLimit keeps 16 GB) of
+volta05's 380 GB (raised from 320 GB on 2026-11-17 for the parked-conversation
+cache below): the ~84 GB staged pack counts against the job if `/tmp` is
 tmpfs, plus the PLE table in RAM (`--ple-io ram`, 28.8 GB), pinned KV and the
 drafter; the 262k soak saw 274 GB `MemAvailable` on the node at its lowest.
+
+**Parked-conversation cache.** Between requests Strata parks each
+conversation's KV in RAM so the next request reuses the prefix instead of
+re-reading it. Its defaults (`--conversation-cache-mib` up to 8192,
+`--conversation-cache-slots` 4) hold only 2-3 agent conversations of
+100-145k tokens: with seven ADGFEM lanes on it (2026-11-17) every tool call
+re-read ~100k prompt tokens (25-35 s each, 126 evictions) and no lane finished
+a turn in 45 min. The deployment now sets 192 GiB and 48 slots
+(`STRATA_CONV_CACHE_MIB`, `STRATA_CONV_CACHE_SLOTS`) and `--parallel 8`. The
+engine itself keeps ~104 GiB resident.
 
 **What "blocked" meant.** hopper01 is blocked for the ADGFEM experiments, so
 that those do not clash with the Qwen deployments: the H100s are reserved for
