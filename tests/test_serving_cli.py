@@ -117,3 +117,35 @@ def test_shim_help():
     )
     assert proc.returncode == 0, proc.stderr
     assert "worker" in proc.stdout
+
+
+def test_qwen38_strata_volta_config_and_dry_run(tmp_path):
+    from slurmhelps.serving.config import ServingConfig
+
+    config = ROOT / "llm" / "qwen38" / "config-strata-volta.json"
+    cfg = ServingConfig.from_mapping(json.loads(config.read_text()))
+    assert (cfg.model, cfg.engine, cfg.gpus, cfg.gpu_type) == ("qwen38-flash-next-strata-volta", "strata", 4, "V100")
+    assert (cfg.partition, cfg.nice, cfg.time, cfg.requeue) == ("ffa-gpulab", 100000, "12:00:00", True)
+    assert (cfg.port, cfg.relay_port, cfg.max_model_len) == (8030, 18030, 262144)
+
+    env = dict(ENV, SLURMHELPS_SERVE_DIR=str(tmp_path / "state"))
+    proc = subprocess.run(["bash", str(ROOT / "llm" / "qwen38" / "serve.sh"), "--target", "strata-volta",
+                           "up", "--dry-run"], text=True, capture_output=True, timeout=60, env=env)
+    assert proc.returncode == 0, proc.stderr
+    plan = json.loads(proc.stdout)
+    assert plan["partition"] == "ffa-gpulab" and plan["gres"] == "gpu:V100:4"
+    script = plan["sbatch"]
+    for line in ("#SBATCH --partition=ffa-gpulab", "#SBATCH --gres=gpu:V100:4", "#SBATCH --nice=100000",
+                 "#SBATCH --time=12:00:00", "#SBATCH --requeue", "#SBATCH --mem=320G"):
+        assert line in script.splitlines(), (line, script)
+    assert "serve-strata.sh" in script and "PORT=8030" in script and "MAX_NUM_SEQS=4" in script
+    assert "KV_DTYPE=int8" in script and "--health-url http://127.0.0.1:8030/health" in script
+    for bad in ("ffa-preempt", "gpu-ffa", "gpu-long"):
+        assert bad not in script
+    # bw and hopper still render as before.
+    for target, gres, port in (("bw", "gpu:BW6000:2", 8010), ("hopper", "gpu:H100:2", 8020)):
+        proc = subprocess.run(["bash", str(ROOT / "llm" / "qwen38" / "serve.sh"), "--target", target,
+                               "up", "--dry-run"], text=True, capture_output=True, timeout=60, env=env)
+        plan = json.loads(proc.stdout)
+        assert plan["partition"] == "ffa-preempt" and plan["gres"] == gres
+        assert f"PORT={port}" in plan["sbatch"] and "#SBATCH --nice=100\n" in plan["sbatch"]

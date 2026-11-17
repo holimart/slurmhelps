@@ -91,6 +91,27 @@
       "status": "experimental: upstream vLLM nightly, Marlin W4A16 MoE, PLE cpu offload, MTP off",
       "notes": "Upstream vLLM decodes the CSF NVFP4 expert scales at load (vllm#64312) and serves the NVFP4 PLE table from pinned host RAM (vllm#56273). Serves a symlinked model view with root-level shards (vllm#64739 pending). See llm/qwen38/experiments/2026-11-06-qwen38-hopper.md."
     },
+    "qwen38-flash-next-strata-volta": {
+      "display_name": "Qwen3.8-Flash-Next (IQ3_S GGUF) on Strata, 4x V100",
+      "family": "qwen3.8",
+      "config": "llm/qwen38/config-strata-volta.json",
+      "launcher": "llm/qwen38/serve.sh",
+      "launcher_args": ["--target", "strata-volta"],
+      "served_model_name": "qwen38-flash-next",
+      "rewrite_model": true,
+      "guards": {"rewrite_rules": "llm/qwen38/rewrite_rules.json", "request_bad_words": false},
+      "backend": "llm/qwen38/serve-strata.sh",
+      "engine": "strata-cuda12",
+      "pack": "{work_root}/models/strata/iq3s (ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF IQ3_S, 54.8 GB + 28.8 GB PLE table)",
+      "gpus": "4x V100-SXM2 32GB (volta05)",
+      "context": 262144,
+      "endpoint": "http://127.0.0.1:8030/v1",
+      "router_endpoint": "http://127.0.0.1:18000/v1",
+      "opencode_provider": "slurmhelps-qwen38",
+      "opencode_model": "qwen38-flash-next",
+      "status": "fallback: lowest priority (ffa-gpulab, --nice=100000, preemptible); not yet smoke-tested as a deployment",
+      "notes": "Strata reports the id qwen3.8-flash-next-iq3_s; the router routes it as qwen38-flash-next (rewrite_model) and rewrites the request model. Strata has no bad_words parameter, so the router sends none (request_bad_words: false); history scrub and response rewrite rules still apply, and the node gateway applies the rewrite rules too. Measured 2026-10-26/27 on volta05: 262144 context, needle 6/6 + tool 1/1, see llm/strata/experiments/2026-10-27-v100-extras.md."
+    },
     "glm53-reap50": {
       "display_name": "GLM-5.3-Flash REAP50",
       "family": "glm5",
