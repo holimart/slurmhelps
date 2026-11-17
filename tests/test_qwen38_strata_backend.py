@@ -113,6 +113,22 @@ def test_plan_prints_the_pinned_launch_command():
     assert "jobs/strata-volta-" in command and "bad_words=none" in out
 
 
+def test_plan_sizes_the_parked_conversation_cache_for_many_lanes():
+    # Strata's defaults (8 GiB, 4 parked conversations) made 7 agent lanes evict each other,
+    # so every tool call re-read ~100k prompt tokens (2026-11-17). The config must raise both.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("STRATA_CONV_CACHE")}
+    out = subprocess.run(["bash", str(SCRIPT), "--plan"], env=env, text=True, capture_output=True,
+                         timeout=30, check=True).stdout
+    command = next(line for line in out.splitlines() if line.startswith("command:"))
+    assert "--set conversation-cache-mib=196608" in command, command
+    assert "--set conversation-cache-slots=48" in command, command
+    config = json.loads((ROOT / "llm" / "qwen38" / "config-strata-volta.json").read_text())["serving"]
+    mem_gib = int(config["mem"].rstrip("G"))
+    # the job must hold the cache plus the ~104 GiB the engine keeps resident
+    assert mem_gib * 1024 >= 196608 + 104 * 1024 + 32 * 1024, config["mem"]
+    assert config["max_num_seqs"] == 8
+
+
 def test_refuses_without_slurm_job():
     env = {k: v for k, v in os.environ.items() if k != "SLURM_JOB_ID"}
     proc = subprocess.run(["bash", str(SCRIPT)], env=env, text=True, capture_output=True, timeout=30)
