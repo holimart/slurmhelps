@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Login-node router over every slurmhelps deployment (qwen38: bw first, then hopper).
+# Login-node router over every slurmhelps deployment (qwen38: bw first, then hopper,
+# then the lowest-priority Strata fallback strata-volta).
 #
 #   llm/qwen38/router.sh start    # background; pid + log under <state root>/router/
 #   llm/qwen38/router.sh status   # which deployment is active (exit 0 only if one is ready)
@@ -19,10 +20,10 @@ STATE_ROOT=${SLURMHELPS_SERVE_ROOT:-$ROOT/.slurmhelps-serve}
 RUN_DIR="$STATE_ROOT/router"
 PIDFILE="$RUN_DIR/router-$PORT.pid"
 LOG="$RUN_DIR/router-$PORT.log"
-# Every <state root>/*/state.json is discovered; qwen38 prefers bw, then hopper.
+# Every <state root>/*/state.json is discovered; qwen38 prefers bw, then hopper, then strata-volta.
 # Per-model guards (bad_words + rewrite rules) come from llm/models.json.
 ARGS=(router --state-root "$STATE_ROOT" --listen-port "$PORT"
-  --prefer qwen38-flash-next,qwen38-flash-next-hopper ${QWEN38_ROUTER_ARGS:-})
+  --prefer qwen38-flash-next,qwen38-flash-next-hopper,qwen38-flash-next-strata-volta ${QWEN38_ROUTER_ARGS:-})
 
 running() { [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; }
 
@@ -43,6 +44,6 @@ case "${1:-status}" in
     exec "$CLI" router --status --listen-port "$PORT" "${@:2}"
     ;;
   run) exec "$CLI" "${ARGS[@]}" ;;
-  -h|--help|help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  -h|--help|help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) echo "usage: $0 start|stop|status|run" >&2; exit 2 ;;
 esac

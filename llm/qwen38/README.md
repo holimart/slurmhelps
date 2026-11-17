@@ -72,16 +72,34 @@ using the new node from `serve.sh status --json` or `serve.sh endpoint`. A
 tunnel targets `host:port`, not a Slurm job ID, so an already open tunnel can
 survive a job restart only while the node and port stay the same.
 
-## Two deployments and the login-node router
+## Deployments and the login-node router
 
 | deployment | config | GPUs | node port | state dir | status |
 |---|---|---|---|---|---|
 | `bw` | `config-bw.json` | 2× BW6000 96 GB, bw01 | 8010 | `.slurmhelps-serve/qwen38-flash-next` | production |
 | `hopper` | `config-hopper.json` | 2× H100 80 GB, hopper01 (`--gres=gpu:H100:2`) | 8020 | `.slurmhelps-serve/qwen38-flash-next-hopper` | production (reserved for Qwen) |
+| `strata-volta` | `config-strata-volta.json` | 4× V100-SXM2 32 GB, volta05 (`--gres=gpu:V100:4`), `ffa-gpulab`, `--nice=100000` | 8030 (Strata on 8031 behind the node gateway) | `.slurmhelps-serve/qwen38-flash-next-strata-volta` | lowest-priority fallback (operator 2026-11-17); not yet smoke-tested as a deployment |
 
-`serve.sh` selects a deployment with `--target bw|hopper` (default `bw`, which
-behaves exactly as before). Both deployments are meant to run at the same time,
-so that at least one is up whenever possible.
+`serve.sh` selects a deployment with `--target bw|hopper|strata-volta`
+(default `bw`, which behaves exactly as before). The deployments are meant to
+run at the same time, so that at least one is up whenever possible.
+
+**strata-volta** serves the IQ3_S GGUF (`models/strata/iq3s`, 54.8 GB + 28.8 GB
+PLE table) with the Strata engine (cuda12 build, sm_70) on all four V100s of
+volta05 at 262,144 context, `--kv int8`, `--parallel 4`, MTP on: the recipe
+measured in `../strata/experiments/2026-10-27-v100-extras.md` (needle 6/6 and
+tool 1/1 at 262k). `serve-strata.sh` stages the pack to the job's node-local
+`/tmp` (re-staged every job: `/tmp` is a per-job namespace on volta05, 22-90
+min from Lustre), seeds a private engine data dir per job (a concurrent
+`strata launch` cannot strip `--mtp`), starts Strata on loopback `$PORT+1`,
+and starts the node gateway on `$PORT` only once `/v1/models` lists the model
+(Strata's own `/health` answers 200 while still loading). SIGTERM stops the
+engine with `strata launch --stop`. The serving config has no node-list
+field; `--gres=gpu:V100:4` pins the job to volta05, the only node with four
+V100s (the other volta nodes have 1-2 cards). Memory is 320 GB of
+volta05's 380 GB: the ~84 GB staged pack counts against the job if `/tmp` is
+tmpfs, plus the PLE table in RAM (`--ple-io ram`, 28.8 GB), pinned KV and the
+drafter; the 262k soak saw 274 GB `MemAvailable` on the node at its lowest.
 
 **What "blocked" meant.** hopper01 is blocked for the ADGFEM experiments, so
 that those do not clash with the Qwen deployments: the H100s are reserved for
@@ -102,8 +120,15 @@ is `ready` with a fresh heartbeat.
 
 - **Routing:** each request goes by its OpenAI `model` field.
   - `qwen38-flash-next` goes to `qwen38-flash-next` (bw) first, then to
-    `qwen38-flash-next-hopper`. Change the order with `--prefer`; map extra
-    names to a served model with `--alias NAME=MODEL`.
+    `qwen38-flash-next-hopper`, then to `qwen38-flash-next-strata-volta`.
+    Change the order with `--prefer`; map extra names to a served model with
+    `--alias NAME=MODEL`. With `--balance least-inflight` the deployment with
+    the fewest requests in flight takes each request and preference order
+    breaks ties, so the Strata fallback is used only when bw and hopper are
+    busier or down.
+  - Strata reports the id `qwen3.8-flash-next-iq3_s`. Its `models.json` entry
+    has `"rewrite_model": true`, so the router treats it as a replica of
+    `qwen38-flash-next` and rewrites the request's `model` to Strata's id.
   - Other names go to whichever deployment serves them. Unknown names get 404
     `model_not_found`.
   - `/v1/models` is the union of the ready deployments' models.
@@ -124,7 +149,11 @@ gateway's guards in-process, reusing the gateway code:
   shellguard and privguard repairs.
 - **Responses:** JSON and SSE are rewritten; streams stay streams.
 
-A deployment started with `QWEN38_GATEWAY=0` is therefore still guarded. The
+A deployment started with `QWEN38_GATEWAY=0` is therefore still guarded.
+Strata has no `bad_words` sampling parameter, so the strata-volta entry sets
+`"request_bad_words": false`: the router sends it no `bad_words` field (a
+client's own is dropped too), while the history scrub and the response
+rewrite still apply. The
 guards are idempotent, so they also run when the node gateway is on, and tests
 check that the result is the same as applying them once. Router rewrites are
 logged to `.slurmhelps-serve/router/rewrites-<model>.jsonl`.
@@ -151,7 +180,10 @@ On the login node itself, use `http://127.0.0.1:18000/v1` directly.
 
 1. Every Qwen job is preemptible and lowest priority: partition `ffa-preempt`
    only, `--requeue`, `--nice=100`. Never `gpu-ffa`, `gpu-ffa-preempt`,
-   `gpu-long` and so on.
+   `gpu-long` and so on. Exception: the Strata fallback
+   `qwen38-flash-next-strata-volta` runs on volta05 in `ffa-gpulab` at
+   `--nice=100000` (operator 2026-11-17), lowest priority, preemptible
+   (`--requeue`, 12 h partition maximum).
 2. Never submit to the L40 nodes (ampere01/03, fuuk-*, uk-g6-*, mff-a2-19,
    ucjf-a4-01). They are reserved for experiments. Hopper jobs are pinned with
    `--gres=gpu:H100:2`; hopper01 is the only H100 node.
