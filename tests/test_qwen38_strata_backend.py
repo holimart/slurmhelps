@@ -183,3 +183,17 @@ def test_stages_gates_gateway_on_loaded_model_and_stops_on_sigterm(tmp_path):
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
         out.close()
+
+
+def test_early_exit_pipelines_are_sigpipe_safe():
+    """Under `set -euo pipefail` a `x=$(producer | reader-that-exits-early)` assignment dies with
+    the producer's SIGPIPE (exit 141) and kills the backend: job 38585702 on volta05 died at
+    `lib=$(ldconfig -p | awk '...{print $NF; exit}')`. Every such substitution must end in `|| true`."""
+    import re
+    early = re.compile(r"\|\s*(head\b|awk\b[^|]*\bexit\b|grep\s+-[a-zA-Z]*[qm])")
+    bad = []
+    for no, line in enumerate(SCRIPT.read_text().splitlines(), 1):
+        code = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
+        if "=$(" in code and early.search(code) and "|| true" not in code:
+            bad.append(f"{no}: {line.strip()}")
+    assert not bad, "unguarded early-exit pipelines:\n" + "\n".join(bad)

@@ -198,7 +198,9 @@ precheck_engine_libs() {
   [ -n "$bin" ] || { log "precheck: no $variant engine binary found; leaving the choice to strata launch"; return 0; }
   need=$(strings "$bin" 2>/dev/null | grep -oE 'GLIBCXX_[0-9.]+' | sort -V | tail -1 || true)
   [ -n "$need" ] || return 0
-  lib=$(ldconfig -p 2>/dev/null | awk '/libstdc\+\+\.so\.6 /{print $NF; exit}')
+  # awk exits at the first match, so ldconfig can die of SIGPIPE; under pipefail + set -e that
+  # killed the backend with exit 141 on volta05 (job 38585702). Guard it like the lines above.
+  lib=$(ldconfig -p 2>/dev/null | awk '/libstdc\+\+\.so\.6 /{print $NF; exit}' || true)
   has_symbol() { strings "$1" 2>/dev/null | awk -v n="$need" '$0==n{f=1} END{exit !f}'; }
   if [ -n "$lib" ] && has_symbol "$lib"; then
     log "precheck: engine $variant needs $need; node libstdc++ has it"
