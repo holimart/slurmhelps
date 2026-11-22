@@ -346,8 +346,30 @@ def require(cfg: dict, *dotted: str) -> None:
         )
 
 
+def _job_overrides(c: dict) -> dict:
+    """Per-job overrides from the caller's environment (used by competitionsall lane_gpu.py).
+
+    SLURMHELPS_GPU_TYPE=A100  -> gres gpu:A100:1, A100 removed from exclude_gpus, gpu_rank {A100: 1}.
+    SLURMHELPS_EXTRA_EXCLUDE_NODES=a,b -> appended to exclude_nodes (never removes an exclusion).
+    The type must be listed in cluster.allowed_gpu_types; nothing else in the config can be loosened.
+    """
+    c = dict(c)
+    gpu_type = os.environ.get("SLURMHELPS_GPU_TYPE", "").strip()
+    if gpu_type:
+        allowed = [str(t) for t in c.get("allowed_gpu_types", [])]
+        if gpu_type not in allowed:
+            raise SystemExit(f"slurmhelps: SLURMHELPS_GPU_TYPE={gpu_type} not in cluster.allowed_gpu_types {allowed}")
+        c["gres"] = f"gpu:{gpu_type}:1"
+        c["exclude_gpus"] = [x for x in c.get("exclude_gpus", []) if x != gpu_type]
+        c["gpu_rank"] = {gpu_type: 1}
+    extra = [n.strip() for n in os.environ.get("SLURMHELPS_EXTRA_EXCLUDE_NODES", "").split(",") if n.strip()]
+    if extra:
+        c["exclude_nodes"] = list(dict.fromkeys([*c.get("exclude_nodes", []), *extra]))
+    return c
+
+
 def shell_vars(cfg: dict) -> dict[str, str]:
-    c, g, q = cfg["cluster"], cfg["lan_gpu"], cfg["queue"]
+    c, g, q = _job_overrides(cfg["cluster"]), cfg["lan_gpu"], cfg["queue"]
 
     def words(xs: list) -> str:
         return " ".join(str(x) for x in xs)
